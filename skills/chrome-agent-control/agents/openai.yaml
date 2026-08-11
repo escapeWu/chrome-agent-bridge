@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chrome Agent Control"
+  short_description: "Control a user-approved Chrome tab through MCP"
+  default_prompt: "Use $chrome-agent-control to inspect and interact with an approved Chrome tab."

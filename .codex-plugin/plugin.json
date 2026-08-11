@@ -1,0 +1,38 @@
+{
+  "name": "chrome-agent-bridge",
+  "version": "0.1.0",
+  "description": "Control user-approved Chrome tabs through a local MCP bridge.",
+  "author": {
+    "name": "梧桐",
+    "url": "https://github.com/escapeWu"
+  },
+  "homepage": "https://github.com/escapeWu/chrome-agent-bridge",
+  "repository": "https://github.com/escapeWu/chrome-agent-bridge",
+  "license": "MIT",
+  "keywords": [
+    "chrome",
+    "browser-automation",
+    "mcp",
+    "agent"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Chrome Agent Bridge",
+    "shortDescription": "Control approved Chrome tabs through MCP.",
+    "longDescription": "A local, open-source Chrome bridge for agents. It exposes a small MCP tool surface for listing tabs, navigating, taking snapshots and screenshots, clicking, and filling non-password fields.",
+    "developerName": "梧桐",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/escapeWu/chrome-agent-bridge",
+    "defaultPrompt": [
+      "Inspect my current Chrome tab and summarize the page.",
+      "Open a page in Chrome and verify the visible UI.",
+      "Fill the approved form fields, but do not submit."
+    ]
+  }
+}

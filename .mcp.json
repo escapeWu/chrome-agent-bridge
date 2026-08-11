@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "chrome-agent-bridge": {
+      "title": "Chrome Agent Bridge",
+      "description": "Control user-approved Chrome tabs through a local bridge.",
+      "command": "node",
+      "args": [
+        "./mcp/server.mjs"
+      ],
+      "cwd": ".",
+      "env_vars": [
+        "CHROME_AGENT_BRIDGE_DIR"
+      ]
+    }
+  }
+}
