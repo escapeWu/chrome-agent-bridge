@@ -34,7 +34,7 @@ jobs:
         run: echo "tag=${MANUAL_TAG:-$PUSH_TAG}" >> "$GITHUB_OUTPUT"
       - run: node scripts/check-release-version.mjs "${{ steps.release.outputs.tag }}"
       - run: npm run build:extension
-      - run: sha256sum dist/*.zip > dist/SHA256SUMS.txt
+      - run: cd dist && sha256sum *.zip > SHA256SUMS.txt
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
