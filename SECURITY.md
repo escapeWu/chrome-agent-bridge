@@ -4,4 +4,6 @@ Please report vulnerabilities privately through GitHub's **Report a vulnerabilit
 
 The bridge is intended for local, user-present automation. It is not a remote browser-control service and must not be exposed beyond the loopback interface.
 
-The long-lived bearer token in `~/.chrome-agent-bridge/auth.json` grants control through the local bridge. Keep the file private, never commit or log the token, and use **Renew** in the extension popup immediately if the token may have been disclosed. Renewal invalidates the previous token.
+The long-lived bearer token in `~/.chrome-agent-bridge/auth.json` grants control through the local bridge. With Raw CDP enabled, that includes arbitrary developer-protocol commands that may read credentials, cookies, storage, page contents, request or response bodies, and other sensitive browser data. Keep the file private, never commit or log the token or Raw results containing secrets, and use **Renew** in the extension popup immediately if the token may have been disclosed. Renewal invalidates the previous token.
+
+Never bind the RPC server beyond `127.0.0.1`, forward its port, place it behind a public proxy, or share its bearer token. Raw CDP is designed for a user-present local Agent operating an explicitly selected tab, not unattended or remote browser administration.

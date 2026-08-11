@@ -20,13 +20,14 @@ test("extension manifest requests only the documented capability set", async () 
   assert.equal(id, EXTENSION_ID);
   assert.deepEqual(manifest.permissions.sort(), [
     "activeTab",
+    "debugger",
     "nativeMessaging",
     "scripting",
     "tabs",
   ]);
   assert.equal(manifest.permissions.includes("cookies"), false);
   assert.equal(manifest.permissions.includes("history"), false);
-  assert.equal(manifest.permissions.includes("debugger"), false);
+  assert.equal(manifest.permissions.includes("debugger"), true);
   assert.deepEqual(manifest.host_permissions, ["<all_urls>"]);
 
   const expectedIcons = {
