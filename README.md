@@ -12,10 +12,12 @@ It does not contain or redistribute OpenAI's proprietary Chrome extension, brows
 
 ```text
 Agent → MCP server → authenticated loopback RPC → Native Messaging host
-      → Chrome extension → tabs / scripting / screenshots
+      → Chrome extension → tabs / scripting / screenshots / sanitized network tools / Raw CDP
 ```
 
-The MCP surface is intentionally narrow: list, open, activate, navigate, watch, and safely close bridge-created tabs; read a visible snapshot; take a screenshot; click; and fill non-password fields. It does not expose cookies, passwords, browser storage, arbitrary JavaScript, or raw CDP.
+The MCP surface has two levels. The default tools list, navigate, watch, snapshot, screenshot, click, fill, and monitor sanitized request lifecycle metadata. The explicit Raw CDP tools attach to one tab and forward arbitrary CDP methods, params, results, target sessions, and events without field sanitization.
+
+**Raw CDP is equivalent to granting the local bearer token full developer control of an attached tab.** Depending on the commands sent, it can execute JavaScript, read or modify page content, inspect cookies and storage, capture request or response bodies, intercept traffic, and control child targets. Do not expose the loopback service or token to another user or machine.
 
 ## Requirements
 
@@ -26,6 +28,8 @@ The MCP surface is intentionally narrow: list, open, activate, navigate, watch, 
 Windows native-host installation is not implemented in the initial release.
 
 ## Install
+
+For an Agent-executable checklist, MCP configuration, verification steps, upgrades, and recovery guidance, see [Install Chrome Agent Bridge for an Agent](./docs/agent-installation.md).
 
 ### Install the released extension ZIP
 
@@ -60,12 +64,12 @@ Agents can use this section as an installation and connection checklist:
 2. Run `npm ci` and `npm run install-host` in the repository root. The released extension ID is built in.
 3. Ask the user to download and extract the Extension ZIP, then load its extracted directory from `chrome://extensions` with **Developer mode** enabled. This is the only required user-visible approval step.
 4. Ask the user to reload **Chrome Agent Bridge** after source, manifest, or native-host installation changes.
-5. Add `mcp/server.mjs` to the agent's MCP configuration using an absolute filesystem path, or install this repository as a Codex plugin.
+5. Add `mcp/server.mjs` to the Agent's MCP configuration using an absolute filesystem path, or install this repository as a Codex plugin. Copy the ready-to-use configuration from [docs/agent-installation.md](./docs/agent-installation.md).
 6. Call `browser_status`, then `browser_list_tabs`. Do not begin browser actions until the bridge reports connected.
 
-For page interaction, take a fresh `browser_snapshot` before every click or fill and use selectors from that snapshot. For monitoring, call `browser_watch_events` with the previous cursor and, when useful, a specific `tabId`. Treat `bridge_offline`, `tab_not_found`, and `selector_not_found` as recoverable state: reconnect or refresh the snapshot instead of guessing.
+For page interaction, take a fresh `browser_snapshot` before every click or fill and use selectors from that snapshot. For tab monitoring, call `browser_watch_events` with the previous cursor and, when useful, a specific `tabId`. For sanitized request monitoring, start one tab-scoped session with `browser_network_start`, perform the intended UI action, page through `browser_network_poll`, and always finish with `browser_network_stop`. Use Raw CDP only when explicitly requested or when a required authorized operation cannot be expressed through the narrower tools; attach with `browser_cdp_attach`, send commands, poll events, and always call `browser_cdp_detach`.
 
-Never submit forms, purchase, publish, delete, send messages, or change permissions without the user's explicit approval. The bridge intentionally rejects password fields and does not expose cookies or browser storage.
+Never submit forms, purchase, publish, delete, send messages, or change permissions without the user's explicit approval. The high-level fill tool rejects password fields, but Raw CDP bypasses those high-level guardrails and may expose cookies, storage, credentials, and private page content.
 
 ## Connect an MCP agent
 
@@ -99,6 +103,13 @@ The repository is also a Codex plugin: `.codex-plugin/plugin.json` registers the
 - `browser_click`
 - `browser_fill`
 - `browser_watch_events`
+- `browser_network_start`
+- `browser_network_poll`
+- `browser_network_stop`
+- `browser_cdp_attach`
+- `browser_cdp_send`
+- `browser_cdp_events`
+- `browser_cdp_detach`
 
 Call `browser_snapshot` before clicking or filling. Use selectors from the latest snapshot and verify state again after each action.
 
@@ -110,10 +121,17 @@ Call `browser_snapshot` before clicking or filling. Use selectors from the lates
 - The token is stored in `~/.chrome-agent-bridge/auth.json` with user-only permissions. It has no automatic expiry and remains valid until the user selects **Renew** in the extension popup.
 - Runtime connection data is stored separately in `~/.chrome-agent-bridge/runtime.json`; it does not contain the token.
 - Renewing the token atomically replaces the local credential and immediately rejects the previous token.
-- Password inputs are rejected in the extension.
+- Password inputs are rejected by `browser_fill`; Raw CDP commands are not restricted by that check.
 - Browser-internal URLs cannot be inspected or scripted.
-- The bridge never reads cookies, saved passwords, local storage, or session storage.
+- The default high-level tools do not read cookies, saved passwords, local storage, or session storage. Raw CDP can access data exposed by Chrome's CDP implementation.
+- Network monitoring uses Chrome's user-visible `debugger` permission and attaches only to the selected tab for the lifetime of a network session.
+- Network events contain lifecycle metadata only. Userinfo, query strings, URL fragments, headers, request bodies, response bodies, and raw CDP request IDs are not returned.
+- Network sessions have bounded event and byte buffers, monotonically increasing cursors, tab isolation, and explicit stop/detach behavior.
+- Raw CDP accepts any method and JSON params and returns original results and events, including sensitive fields. Raw event buffers are bounded to 3 MB and command results to 3 MB by the Native Messaging transport envelope.
+- Raw and sanitized network sessions are mutually exclusive on the same tab because Chrome allows one debugger attachment owner per target.
 - Agents should require user confirmation before submitting, purchasing, publishing, deleting, sending, or changing permissions.
+
+The clean-room capability analysis and migration boundaries are documented in [docs/clean-room-browser-capabilities.md](./docs/clean-room-browser-capabilities.md).
 
 This is an early developer release. Review the requested tab and action before allowing an agent to operate a signed-in site.
 

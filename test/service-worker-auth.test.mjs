@@ -25,7 +25,7 @@ test("service worker proxies popup token requests only through native messaging"
     runtime: {
       id: "hkedmoboloodflgcaidimhddljdnndcd",
       connectNative: () => port,
-      getManifest: () => ({ version: "0.3.0" }),
+      getManifest: () => ({ version: "0.5.0" }),
       onInstalled: passiveEvent(),
       onStartup: passiveEvent(),
       onMessage: runtimeMessage,

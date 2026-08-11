@@ -6,7 +6,7 @@ import { BridgeOfflineError, callBridge } from "../lib/bridge-client.mjs";
 
 const server = new McpServer({
   name: "chrome-agent-bridge",
-  version: "0.3.0",
+  version: "0.5.0",
 });
 
 function asText(value) {
@@ -193,6 +193,126 @@ tool(
     },
   },
   async (input) => asText(await callBridge("events.poll", input, { timeoutMs: input.timeoutMs + 5_000 })),
+);
+
+const networkSessionId = z.string().min(20).max(120);
+const networkResourceType = z.enum([
+  "document",
+  "stylesheet",
+  "image",
+  "media",
+  "font",
+  "script",
+  "xhr",
+  "fetch",
+  "websocket",
+  "other",
+]);
+
+tool(
+  "browser_network_start",
+  {
+    title: "Start network monitoring",
+    description:
+      "Start a tab-scoped, metadata-only Chrome network monitor. URLs omit credentials, query strings, and fragments; headers and bodies are never returned.",
+    inputSchema: {
+      tabId: z.number().int().nonnegative(),
+      resourceTypes: z.array(networkResourceType).max(10).optional().default([]),
+      urlIncludes: z.array(z.string().max(200)).max(20).optional().default([]),
+      maxEvents: z.number().int().min(1).max(1_000).optional().default(500),
+      maxBytes: z.number().int().min(65_536).max(4_000_000).optional().default(1_000_000),
+    },
+  },
+  async (input) => asText(await callBridge("network.start", input)),
+);
+
+tool(
+  "browser_network_poll",
+  {
+    title: "Poll network events",
+    description:
+      "Read sanitized request, response, completion, failure, and WebSocket lifecycle metadata after a network-session cursor.",
+    inputSchema: {
+      sessionId: networkSessionId,
+      afterCursor: z.number().int().nonnegative().optional().default(0),
+      limit: z.number().int().min(1).max(200).optional().default(100),
+      timeoutMs: z.number().int().min(0).max(25_000).optional().default(10_000),
+    },
+  },
+  async (input) => asText(
+    await callBridge("network.poll", input, { timeoutMs: input.timeoutMs + 5_000 }),
+  ),
+);
+
+tool(
+  "browser_network_stop",
+  {
+    title: "Stop network monitoring",
+    description: "Stop a network monitor, detach Chrome debugging from its tab, and release its active resources.",
+    inputSchema: { sessionId: networkSessionId },
+  },
+  async (input) => asText(await callBridge("network.stop", input)),
+);
+
+const rawSessionId = z.string().min(20).max(120);
+
+tool(
+  "browser_cdp_attach",
+  {
+    title: "Attach Raw CDP",
+    description:
+      "Attach an unrestricted Chrome DevTools Protocol session to one tab. Raw commands and events may expose credentials, cookies, storage, page contents, request bodies, and response bodies.",
+    inputSchema: {
+      tabId: z.number().int().nonnegative(),
+      maxEvents: z.number().int().min(1).max(1_000).optional().default(500),
+      maxBytes: z.number().int().min(65_536).max(3_000_000).optional().default(1_000_000),
+    },
+  },
+  async (input) => asText(await callBridge("raw.attach", input)),
+);
+
+tool(
+  "browser_cdp_send",
+  {
+    title: "Send Raw CDP command",
+    description:
+      "Send any CDP method and JSON params without a method allowlist or response sanitization. Use targetSessionId for a child target previously attached within this Raw CDP session.",
+    inputSchema: {
+      sessionId: rawSessionId,
+      method: z.string().min(1).max(200),
+      params: z.record(z.unknown()).optional().default({}),
+      targetSessionId: z.string().min(1).max(200).optional(),
+    },
+  },
+  async (input) => asText(await callBridge("raw.send", input)),
+);
+
+tool(
+  "browser_cdp_events",
+  {
+    title: "Poll Raw CDP events",
+    description:
+      "Read original CDP event methods, source targets, and params without field sanitization. Results may contain secrets or private browsing data.",
+    inputSchema: {
+      sessionId: rawSessionId,
+      afterCursor: z.number().int().nonnegative().optional().default(0),
+      limit: z.number().int().min(1).max(200).optional().default(100),
+      timeoutMs: z.number().int().min(0).max(25_000).optional().default(10_000),
+    },
+  },
+  async (input) => asText(
+    await callBridge("raw.poll", input, { timeoutMs: input.timeoutMs + 5_000 }),
+  ),
+);
+
+tool(
+  "browser_cdp_detach",
+  {
+    title: "Detach Raw CDP",
+    description: "Detach an unrestricted CDP session from its tab and release child-target routing state.",
+    inputSchema: { sessionId: rawSessionId },
+  },
+  async (input) => asText(await callBridge("raw.detach", input)),
 );
 
 await server.connect(new StdioServerTransport());

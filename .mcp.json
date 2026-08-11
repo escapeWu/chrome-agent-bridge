@@ -2,7 +2,7 @@
   "mcpServers": {
     "chrome-agent-bridge": {
       "title": "Chrome Agent Bridge",
-      "description": "Control user-approved Chrome tabs through a local bridge.",
+      "description": "Control and monitor user-approved Chrome tabs through a local bridge, with explicit Raw CDP support.",
       "command": "node",
       "args": [
         "./mcp/server.mjs"
