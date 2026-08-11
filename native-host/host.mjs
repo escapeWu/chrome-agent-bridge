@@ -218,7 +218,7 @@ function handleExtensionMessage(message) {
   }
   if (message?.type === "hello") {
     extensionVersion = typeof message.extensionVersion === "string" ? message.extensionVersion : "0.0.0";
-    sendNative({ type: "hello", ok: true, host: "chrome-agent-bridge", version: "0.5.0" });
+    sendNative({ type: "hello", ok: true, host: "chrome-agent-bridge", version: "0.6.0" });
     return;
   }
   if (message?.type === "event" && typeof message.event === "string") {
@@ -313,7 +313,7 @@ server.listen(0, "127.0.0.1", async () => {
       startedAt: new Date().toISOString(),
   };
   await writePrivateJsonAtomic(runtimeFile(), runtimeIdentity);
-  sendNative({ type: "ready", ok: true, version: "0.5.0" });
+  sendNative({ type: "ready", ok: true, version: "0.6.0" });
 });
 
 async function cleanup() {

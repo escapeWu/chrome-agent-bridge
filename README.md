@@ -15,7 +15,7 @@ Agent → MCP server → authenticated loopback RPC → Native Messaging host
       → Chrome extension → tabs / scripting / screenshots / sanitized network tools / Raw CDP
 ```
 
-The MCP surface has two levels. The default tools list, navigate, watch, snapshot, screenshot, click, fill, and monitor sanitized request lifecycle metadata. The explicit Raw CDP tools attach to one tab and forward arbitrary CDP methods, params, results, target sessions, and events without field sanitization.
+The MCP surface has two levels. The default tools list, navigate, watch, snapshot, screenshot, click, fill, and monitor sanitized request lifecycle metadata. The explicit Raw CDP tools attach to one tab and forward arbitrary CDP methods, params, results, target sessions, and events without field sanitization. A sanitized network projection can reuse the same Raw attachment when an Agent needs Raw commands without exposing Raw network events to its context.
 
 **Raw CDP is equivalent to granting the local bearer token full developer control of an attached tab.** Depending on the commands sent, it can execute JavaScript, read or modify page content, inspect cookies and storage, capture request or response bodies, intercept traffic, and control child targets. Do not expose the loopback service or token to another user or machine.
 
@@ -50,6 +50,12 @@ npm run install-host
 
 Reload the extension on `chrome://extensions`. The extension and native host reconnect automatically. For a custom development build with a different ID, pass `--extension-id ID` explicitly.
 
+### Install the paired Agent Skill
+
+Installing only the Extension ZIP and MCP server is incomplete for Agent use. Also install `skills/chrome-agent-control` so the Agent follows the required connection, tab-scoping, network-listening, Raw CDP, cleanup, and confirmation workflows.
+
+The Codex plugin bundle installs the MCP registration and Skill together. When configuring `mcp/server.mjs` as a standalone MCP server, install the Skill separately. See the exact Agent checklist in [docs/agent-installation.md](./docs/agent-installation.md).
+
 ### Pairing token
 
 Click the extension toolbar icon to open its local pairing window. The window shows a masked, long-lived authentication token with controls to reveal, copy, or renew it. Renew requires two clicks and invalidates the previous token immediately.
@@ -65,9 +71,10 @@ Agents can use this section as an installation and connection checklist:
 3. Ask the user to download and extract the Extension ZIP, then load its extracted directory from `chrome://extensions` with **Developer mode** enabled. This is the only required user-visible approval step.
 4. Ask the user to reload **Chrome Agent Bridge** after source, manifest, or native-host installation changes.
 5. Add `mcp/server.mjs` to the Agent's MCP configuration using an absolute filesystem path, or install this repository as a Codex plugin. Copy the ready-to-use configuration from [docs/agent-installation.md](./docs/agent-installation.md).
-6. Call `browser_status`, then `browser_list_tabs`. Do not begin browser actions until the bridge reports connected.
+6. Install and enable the paired `chrome-agent-control` Skill. Do not treat MCP configuration alone as a complete Agent installation.
+7. Call `browser_status`, then `browser_list_tabs`. Do not begin browser actions until the bridge reports connected.
 
-For page interaction, take a fresh `browser_snapshot` before every click or fill and use selectors from that snapshot. For tab monitoring, call `browser_watch_events` with the previous cursor and, when useful, a specific `tabId`. For sanitized request monitoring, start one tab-scoped session with `browser_network_start`, perform the intended UI action, page through `browser_network_poll`, and always finish with `browser_network_stop`. Use Raw CDP only when explicitly requested or when a required authorized operation cannot be expressed through the narrower tools; attach with `browser_cdp_attach`, send commands, poll events, and always call `browser_cdp_detach`.
+For page interaction, take a fresh `browser_snapshot` before every click or fill and use selectors from that snapshot. For tab monitoring, call `browser_watch_events` with the previous cursor and, when useful, a specific `tabId`. Start sanitized request monitoring before the intended UI action, page through `browser_network_poll`, and always finish with `browser_network_stop`. When Raw commands and a safe network summary are both required, attach Raw with `captureEvents=false` and pass its session ID to `browser_network_start` as `rawSessionId`; this shares one Chrome debugger attachment. Do not fall back to Resource Timing or page-level fetch/XHR hooks merely because the page's performance buffer is full.
 
 Never submit forms, purchase, publish, delete, send messages, or change permissions without the user's explicit approval. The high-level fill tool rejects password fields, but Raw CDP bypasses those high-level guardrails and may expose cookies, storage, credentials, and private page content.
 
@@ -89,6 +96,8 @@ Use an absolute path when configuring a standalone MCP client:
 The local Agent reads `~/.chrome-agent-bridge/auth.json` automatically. Set `CHROME_AGENT_BRIDGE_TOKEN` only when configuring a separate local process with a token copied from the extension popup.
 
 The repository is also a Codex plugin: `.codex-plugin/plugin.json` registers the MCP server and the `chrome-agent-control` skill.
+
+**Standalone MCP clients must install the paired Skill separately.** The Extension ZIP contains only the Chrome extension, and an MCP configuration exposes tools without teaching the Agent the required workflow. Follow [Install Chrome Agent Bridge for an Agent](./docs/agent-installation.md).
 
 ## Tools
 
@@ -125,10 +134,10 @@ Call `browser_snapshot` before clicking or filling. Use selectors from the lates
 - Browser-internal URLs cannot be inspected or scripted.
 - The default high-level tools do not read cookies, saved passwords, local storage, or session storage. Raw CDP can access data exposed by Chrome's CDP implementation.
 - Network monitoring uses Chrome's user-visible `debugger` permission and attaches only to the selected tab for the lifetime of a network session.
-- Network events contain lifecycle metadata only. Userinfo, query strings, URL fragments, headers, request bodies, response bodies, and raw CDP request IDs are not returned.
+- Network events contain lifecycle metadata only. Userinfo, URL fragments, headers, request bodies, response bodies, security details, and raw CDP request IDs are not returned. Query strings are removed by default and preserved only with explicit `urlMode="full"` because they may contain tokens or signatures.
 - Network sessions have bounded event and byte buffers, monotonically increasing cursors, tab isolation, and explicit stop/detach behavior.
 - Raw CDP accepts any method and JSON params and returns original results and events, including sensitive fields. Raw event buffers are bounded to 3 MB and command results to 3 MB by the Native Messaging transport envelope.
-- Raw and sanitized network sessions are mutually exclusive on the same tab because Chrome allows one debugger attachment owner per target.
+- Set `captureEvents=false` when Raw is needed for commands but original events are not required. A sanitized network session can reuse that Raw attachment through `rawSessionId`; stopping the projection leaves Raw attached, while detaching Raw terminates its active projection.
 - Agents should require user confirmation before submitting, purchasing, publishing, deleting, sending, or changing permissions.
 
 The clean-room capability analysis and migration boundaries are documented in [docs/clean-room-browser-capabilities.md](./docs/clean-room-browser-capabilities.md).

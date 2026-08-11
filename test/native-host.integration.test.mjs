@@ -51,7 +51,7 @@ test("native host forwards authenticated loopback RPC to the extension stream", 
 
   await nextMessage((message) => message.type === "ready");
   child.stdin.write(
-    encodeNativeMessage({ type: "hello", extensionVersion: "0.5.0" }),
+    encodeNativeMessage({ type: "hello", extensionVersion: "0.6.0" }),
   );
   const runtime = JSON.parse(await fs.readFile(path.join(bridgeDir, "runtime.json"), "utf8"));
   const initialAuth = JSON.parse(await fs.readFile(path.join(bridgeDir, "auth.json"), "utf8"));

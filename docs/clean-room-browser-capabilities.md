@@ -37,7 +37,7 @@ Each monitoring session belongs to one existing HTTP, HTTPS, or file tab. Starti
 
 The sanitization boundary is inside the extension service worker:
 
-- URL userinfo, query strings, and fragments are removed.
+- URL userinfo and fragments are always removed. Query strings are removed by default and preserved only by the explicit `urlMode="full"` projection option.
 - Request and response headers are never copied into bridge events.
 - Request bodies, response bodies, WebSocket frames, cookies, security details, and raw CDP request IDs are never copied.
 - Raw request IDs are replaced with session-local correlation IDs.
@@ -52,7 +52,7 @@ Raw CDP is a separate, explicit session type. It accepts arbitrary CDP method na
 
 Raw CDP can expose cookies, authorization headers, browser storage, page contents, request and response bodies, WebSocket frames, security details, and any other data returned by the chosen CDP command or event. The local authentication token must therefore be treated as a full browser-control credential.
 
-Raw and sanitized network sessions cannot attach to the same tab concurrently. Each Raw session is tab-scoped, explicitly detached, cursor-paged, and bounded to 1,000 events, a 3 MB event buffer, and a 3 MB command-result envelope. These are transport and lifecycle limits, not CDP method or field allowlists.
+A sanitized network session can reuse an active Raw attachment on the same tab. Agents that only need Raw commands can set `captureEvents=false`, preventing original events from entering the Raw buffer, while the projected stream records only approved metadata. Each Raw session remains tab-scoped, explicitly detached, cursor-paged, and bounded to 1,000 events, a 3 MB event buffer, and a 3 MB command-result envelope. These are transport and lifecycle limits, not CDP method or field allowlists.
 
 ## Migration principles
 

@@ -79,7 +79,23 @@ Only a deliberately separate local process should use the copied token:
 
 Do not commit that configuration or print its token in logs. Prefer automatic local discovery whenever possible.
 
-## Step 4: verify the connection
+## Step 4: install the paired Skill
+
+The Extension ZIP contains only the Chrome extension. Standalone MCP configuration exposes tools but does not install the workflow instructions that teach an Agent how to scope tabs, start monitoring before an action, avoid incomplete page observers, protect secrets, and clean up debugger sessions.
+
+Install the `chrome-agent-control` Skill from:
+
+```text
+https://github.com/escapeWu/chrome-agent-bridge/tree/main/skills/chrome-agent-control
+```
+
+For Codex, invoke `$skill-installer` and ask it to install that GitHub Skill path. If the repository is installed as a Codex plugin bundle, `.codex-plugin/plugin.json` already registers both `.mcp.json` and the Skill; do not install a duplicate copy.
+
+For another Agent, copy or register the `skills/chrome-agent-control` directory using that Agent's Skill installation mechanism. Confirm the Skill named `chrome-agent-control` is available before browser work. MCP-only installation is not considered complete or supported Agent setup.
+
+After installing or updating a Skill, start a new Agent task or reload the client so its Skill catalog is refreshed.
+
+## Step 5: verify the connection
 
 The Agent should call:
 
@@ -106,19 +122,24 @@ An Agent using automatic local discovery normally needs no configuration change 
 
 For sanitized request lifecycle metadata:
 
-1. `browser_network_start`
+1. Call `browser_network_start` before the user-requested action.
 2. Perform the authorized page action.
 3. Page through `browser_network_poll` using its cursor.
 4. Always call `browser_network_stop`.
 
-For unrestricted CDP access:
+The default `urlMode="origin_path"` removes query strings. Use `urlMode="full"` only when the task requires query parameters and the user-authorized scope permits potentially sensitive URLs. Headers, bodies, URL credentials, fragments, security details, and raw CDP request IDs are never returned by the projected stream. Finished and failed events include `method`, `status` when known, and `durationMs`.
 
-1. `browser_cdp_attach`
-2. Send the authorized command with `browser_cdp_send`.
-3. Page through original events with `browser_cdp_events`.
-4. Always call `browser_cdp_detach`, including after errors.
+For Raw commands plus a safe network projection on the same tab:
 
-Raw CDP is unsanitized. Do not echo or persist secrets returned by commands or events. Raw and sanitized network sessions cannot attach to the same tab at the same time.
+1. Call `browser_cdp_attach` with `captureEvents=false`.
+2. Call `browser_network_start` with the same `tabId` and the Raw `sessionId` as `rawSessionId`.
+3. Send authorized commands with `browser_cdp_send` and read summaries with `browser_network_poll`.
+4. Call `browser_network_stop`.
+5. Call `browser_cdp_detach`, including after errors.
+
+Set `captureEvents=true` and call `browser_cdp_events` only when the task explicitly requires original unsanitized events. Do not echo or persist their secrets.
+
+Do not use Resource Timing, `performance.getEntriesByType("resource")`, or page-level fetch/XHR monkeypatching as the normal monitoring path. Those mechanisms are incomplete, depend on page state, may miss workers or frames, and can alter page behavior. Do not change an unrelated UI control merely to manufacture a request after monitoring started too late.
 
 ## Upgrade
 
@@ -132,6 +153,8 @@ npm run install-host
 ```
 
 Then download and extract the matching new Extension ZIP, replace the previously loaded extension directory, and select **Reload** on `chrome://extensions`. The token remains in the user's private bridge directory and does not need to be renewed for a normal upgrade.
+
+Also update or reinstall the paired `chrome-agent-control` Skill. Plugin installations update it with the bundle; standalone Skill copies must be refreshed separately. Start a new Agent task after the update.
 
 ## Uninstall
 

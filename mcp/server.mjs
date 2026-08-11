@@ -6,7 +6,7 @@ import { BridgeOfflineError, callBridge } from "../lib/bridge-client.mjs";
 
 const server = new McpServer({
   name: "chrome-agent-bridge",
-  version: "0.5.0",
+  version: "0.6.0",
 });
 
 function asText(value) {
@@ -196,6 +196,7 @@ tool(
 );
 
 const networkSessionId = z.string().min(20).max(120);
+const rawSessionId = z.string().min(20).max(120);
 const networkResourceType = z.enum([
   "document",
   "stylesheet",
@@ -214,9 +215,11 @@ tool(
   {
     title: "Start network monitoring",
     description:
-      "Start a tab-scoped, metadata-only Chrome network monitor. URLs omit credentials, query strings, and fragments; headers and bodies are never returned.",
+      "Start a tab-scoped, metadata-only Chrome network monitor. Pass rawSessionId to reuse that Raw CDP attachment instead of attaching a second debugger. Headers and bodies are never returned.",
     inputSchema: {
       tabId: z.number().int().nonnegative(),
+      rawSessionId: rawSessionId.optional(),
+      urlMode: z.enum(["origin_path", "full"]).optional().default("origin_path"),
       resourceTypes: z.array(networkResourceType).max(10).optional().default([]),
       urlIncludes: z.array(z.string().max(200)).max(20).optional().default([]),
       maxEvents: z.number().int().min(1).max(1_000).optional().default(500),
@@ -231,7 +234,7 @@ tool(
   {
     title: "Poll network events",
     description:
-      "Read sanitized request, response, completion, failure, and WebSocket lifecycle metadata after a network-session cursor.",
+      "Read sanitized request, response, completion, failure, and WebSocket lifecycle metadata after a cursor. Completion and failure events include method, status when known, and durationMs.",
     inputSchema: {
       sessionId: networkSessionId,
       afterCursor: z.number().int().nonnegative().optional().default(0),
@@ -248,22 +251,21 @@ tool(
   "browser_network_stop",
   {
     title: "Stop network monitoring",
-    description: "Stop a network monitor, detach Chrome debugging from its tab, and release its active resources.",
+    description: "Stop a network monitor and release its resources. It detaches Chrome only when the monitor owns the attachment; a reused Raw session remains attached.",
     inputSchema: { sessionId: networkSessionId },
   },
   async (input) => asText(await callBridge("network.stop", input)),
 );
-
-const rawSessionId = z.string().min(20).max(120);
 
 tool(
   "browser_cdp_attach",
   {
     title: "Attach Raw CDP",
     description:
-      "Attach an unrestricted Chrome DevTools Protocol session to one tab. Raw commands and events may expose credentials, cookies, storage, page contents, request bodies, and response bodies.",
+      "Attach an unrestricted Chrome DevTools Protocol session to one tab. Set captureEvents=false when only commands plus a sanitized network projection are needed; captured Raw events may expose credentials and private data.",
     inputSchema: {
       tabId: z.number().int().nonnegative(),
+      captureEvents: z.boolean().optional().default(true),
       maxEvents: z.number().int().min(1).max(1_000).optional().default(500),
       maxBytes: z.number().int().min(65_536).max(3_000_000).optional().default(1_000_000),
     },

@@ -1,4 +1,4 @@
 interface:
   display_name: "Chrome Agent Control"
-  short_description: "Control, monitor, or use Raw CDP in Chrome"
-  default_prompt: "Use $chrome-agent-control to inspect, control, monitor, or run authorized Raw CDP operations in an approved Chrome tab."
+  short_description: "Control Chrome with safe network or Raw CDP"
+  default_prompt: "Use $chrome-agent-control to operate the approved Chrome tab and choose the safest debugger-backed network workflow."

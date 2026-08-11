@@ -41,5 +41,5 @@ jobs:
         run: >-
           gh release create "${{ steps.release.outputs.tag }}" dist/*.zip dist/SHA256SUMS.txt
           --generate-notes
-          --notes "Install: download the attached Extension ZIP, extract it, then select the extracted directory from chrome://extensions → Developer mode → Load unpacked."
+          --notes "Install: download the attached Extension ZIP, extract it, then select the extracted directory from chrome://extensions → Developer mode → Load unpacked. Agent setup also requires the repository's MCP server and paired chrome-agent-control Skill; follow docs/agent-installation.md."
           --verify-tag

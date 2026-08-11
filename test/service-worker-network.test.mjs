@@ -33,7 +33,7 @@ test("network monitor returns sanitized metadata and detaches cleanly", async ()
     runtime: {
       id: "hkedmoboloodflgcaidimhddljdnndcd",
       connectNative: () => port,
-      getManifest: () => ({ version: "0.5.0" }),
+      getManifest: () => ({ version: "0.6.0" }),
       onInstalled: passiveEvent(),
       onStartup: passiveEvent(),
       onMessage: passiveEvent(),
@@ -81,6 +81,7 @@ test("network monitor returns sanitized metadata and detaches cleanly", async ()
       "Network.requestWillBeSent",
       {
         requestId: "private-cdp-request-id",
+        timestamp: 10,
         type: "Fetch",
         request: {
           method: "GET",
@@ -102,6 +103,7 @@ test("network monitor returns sanitized metadata and detaches cleanly", async ()
       "Network.responseReceived",
       {
         requestId: "private-cdp-request-id",
+        timestamp: 10.1,
         type: "Fetch",
         response: {
           url: "https://example.com/api/candles?token=secret",
@@ -111,6 +113,15 @@ test("network monitor returns sanitized metadata and detaches cleanly", async ()
           headers: { "Set-Cookie": "session=secret" },
           securityDetails: { issuer: "private" },
         },
+      },
+    );
+    debuggerEvent.listener(
+      { tabId: 42 },
+      "Network.loadingFinished",
+      {
+        requestId: "private-cdp-request-id",
+        timestamp: 10.25,
+        encodedDataLength: 512,
       },
     );
 
@@ -123,10 +134,19 @@ test("network monitor returns sanitized metadata and detaches cleanly", async ()
     await flush();
     const polled = nativeMessages.find((message) => message.id === "network-poll");
     assert.equal(polled.ok, true);
-    assert.equal(polled.result.events.length, 2);
+    assert.equal(polled.result.events.length, 3);
     assert.equal(polled.result.events[0].url, "https://example.com/api/candles");
     assert.equal(polled.result.events[0].requestId, "request-1");
     assert.equal(polled.result.events[1].requestId, "request-1");
+    assert.deepEqual(
+      {
+        method: polled.result.events[2].method,
+        status: polled.result.events[2].status,
+        durationMs: polled.result.events[2].durationMs,
+        encodedDataLength: polled.result.events[2].encodedDataLength,
+      },
+      { method: "GET", status: 200, durationMs: 250, encodedDataLength: 512 },
+    );
     const serialized = JSON.stringify(polled.result);
     for (const forbidden of [
       "password",
@@ -172,7 +192,7 @@ test("network monitor is isolated to its selected tab", async () => {
     runtime: {
       id: "hkedmoboloodflgcaidimhddljdnndcd",
       connectNative: () => port,
-      getManifest: () => ({ version: "0.5.0" }),
+      getManifest: () => ({ version: "0.6.0" }),
       onInstalled: passiveEvent(),
       onStartup: passiveEvent(),
       onMessage: passiveEvent(),
