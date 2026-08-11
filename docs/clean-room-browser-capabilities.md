@@ -8,6 +8,8 @@ The analysis used the locally installed, production-built ChatGPT Chrome extensi
 
 The implementation in this repository is independently written against public Chrome Extension, Chrome Debugger Protocol, Native Messaging, and MCP APIs.
 
+The high-level page-control contract also references the MIT-licensed [OpenClaw Browser plugin](https://github.com/openclaw/openclaw/tree/3d707a9b963b91134d01b204638f87841a50787b/extensions/browser). The audited OpenClaw Chrome extension is intentionally a thin CDP transport; its Playwright-backed snapshot/ref/action engine lives in the Browser plugin. Chrome Agent Bridge therefore keeps its own transport and adopts only the relevant semantic contract and actionability ideas, without adding OpenClaw or Playwright as a runtime dependency.
+
 ## Observed architecture shape
 
 The installed extension uses a Manifest V3 service worker, a named Native Messaging host, JSON-RPC-style request/response messages, Chrome tab APIs, content scripts, and a generic Chrome Debugger Protocol relay. Its private runtime performs versioned handshakes before browser-control requests are accepted.
@@ -19,7 +21,7 @@ Chrome Agent Bridge does not emulate that private handshake, replace the officia
 | Capability | Public platform primitive | Migration status |
 | --- | --- | --- |
 | Tab list, create, activate, navigate, close | `chrome.tabs`, `chrome.windows` | Implemented |
-| Visible page snapshot and safe field interaction | `chrome.scripting.executeScript` | Implemented |
+| Semantic page snapshot, short-lived refs, and atomic click/fill/press/select | `chrome.scripting.executeScript` + CDP `Input` | Implemented in v0.7 |
 | Visible viewport screenshot | `chrome.tabs.captureVisibleTab` | Implemented |
 | Tab lifecycle monitoring | `chrome.tabs` events | Implemented |
 | Request lifecycle metadata | `chrome.debugger` + CDP `Network` domain | Implemented in v0.4 |
@@ -45,6 +47,14 @@ The sanitization boundary is inside the extension service worker:
 - Event count and serialized byte limits evict oldest events and increment `dropped`.
 
 This boundary keeps sensitive data out of Native Messaging, the loopback RPC server, MCP results, logs, and Agent context.
+
+## High-level page-control contract
+
+`browser_snapshot` emits visible interactive elements with semantic roles, accessible names, and short-lived refs. Refs are stored only in the extension service worker, belong to the latest snapshot on one tab, and are invalidated after navigation or any successful action.
+
+`browser_act` resolves a current ref by exact role/name/nth semantics with stable ID, test ID, and selector fallbacks. A click scrolls the target into view, waits two animation frames, checks `document.elementFromPoint`, sends hover/press/release through one extension request, and retries target preparation once if hover shifts the hit target. Keyboard presses use CDP input. Fill and native select use DOM setters plus input/change events; password fields remain rejected.
+
+This high-level engine can reuse the extension's active Raw or network debugger attachment. Otherwise it attaches only for the duration of the mouse or keyboard action and detaches in a cleanup path. Raw CDP remains available for low-level diagnostics, but Agents should not assemble ordinary clicks from separate Raw commands.
 
 ## Raw CDP contract
 

@@ -15,7 +15,9 @@ Agent → MCP server → authenticated loopback RPC → Native Messaging host
       → Chrome extension → tabs / scripting / screenshots / sanitized network tools / Raw CDP
 ```
 
-The MCP surface has two levels. The default tools list, navigate, watch, snapshot, screenshot, click, fill, and monitor sanitized request lifecycle metadata. The explicit Raw CDP tools attach to one tab and forward arbitrary CDP methods, params, results, target sessions, and events without field sanitization. A sanitized network projection can reuse the same Raw attachment when an Agent needs Raw commands without exposing Raw network events to its context.
+The MCP surface has two levels. The default tools list, navigate, watch, snapshot, screenshot, act on semantic element refs, and monitor sanitized request lifecycle metadata. The explicit Raw CDP tools attach to one tab and forward arbitrary CDP methods, params, results, target sessions, and events without field sanitization. A sanitized network projection can reuse the same Raw attachment when an Agent needs Raw commands without exposing Raw network events to its context.
+
+High-level page control follows the open-source OpenClaw Browser plugin's `snapshot → ref → act → snapshot` contract while keeping this project's existing Native Messaging, token, MCP, and debugger attachment layers. OpenClaw is a design reference, not a runtime dependency; its Chrome extension is a thin CDP transport, so this project does not fork or embed that transport.
 
 **Raw CDP is equivalent to granting the local bearer token full developer control of an attached tab.** Depending on the commands sent, it can execute JavaScript, read or modify page content, inspect cookies and storage, capture request or response bodies, intercept traffic, and control child targets. Do not expose the loopback service or token to another user or machine.
 
@@ -74,7 +76,7 @@ Agents can use this section as an installation and connection checklist:
 6. Install and enable the paired `chrome-agent-control` Skill. Do not treat MCP configuration alone as a complete Agent installation.
 7. Call `browser_status`, then `browser_list_tabs`. Do not begin browser actions until the bridge reports connected.
 
-For page interaction, take a fresh `browser_snapshot` before every click or fill and use selectors from that snapshot. For tab monitoring, call `browser_watch_events` with the previous cursor and, when useful, a specific `tabId`. Start sanitized request monitoring before the intended UI action, page through `browser_network_poll`, and always finish with `browser_network_stop`. When Raw commands and a safe network summary are both required, attach Raw with `captureEvents=false` and pass its session ID to `browser_network_start` as `rawSessionId`; this shares one Chrome debugger attachment. Do not fall back to Resource Timing or page-level fetch/XHR hooks merely because the page's performance buffer is full.
+For page interaction, take `browser_snapshot`, act once with `browser_act` using a returned ref, then take a new snapshot and verify. Refs are deliberately short-lived and invalidated after an action or navigation. A high-level click performs its full CDP mouse sequence atomically inside the extension; do not split `mouseMoved`, `mousePressed`, and `mouseReleased` across Raw MCP calls. For tab monitoring, call `browser_watch_events` with the previous cursor and, when useful, a specific `tabId`. Start sanitized request monitoring before the intended UI action, page through `browser_network_poll`, and always finish with `browser_network_stop`. When Raw commands and a safe network summary are both required, attach Raw with `captureEvents=false` and pass its session ID to `browser_network_start` as `rawSessionId`; this shares one Chrome debugger attachment. Do not fall back to Resource Timing or page-level fetch/XHR hooks merely because the page's performance buffer is full.
 
 Never submit forms, purchase, publish, delete, send messages, or change permissions without the user's explicit approval. The high-level fill tool rejects password fields, but Raw CDP bypasses those high-level guardrails and may expose cookies, storage, credentials, and private page content.
 
@@ -109,6 +111,7 @@ The repository is also a Codex plugin: `.codex-plugin/plugin.json` registers the
 - `browser_navigate`
 - `browser_snapshot`
 - `browser_screenshot`
+- `browser_act`
 - `browser_click`
 - `browser_fill`
 - `browser_watch_events`
@@ -120,7 +123,7 @@ The repository is also a Codex plugin: `.codex-plugin/plugin.json` registers the
 - `browser_cdp_events`
 - `browser_cdp_detach`
 
-Call `browser_snapshot` before clicking or filling. Use selectors from the latest snapshot and verify state again after each action.
+Prefer `browser_snapshot → browser_act(ref) → browser_snapshot`. `browser_click` and `browser_fill` remain selector-based compatibility tools.
 
 ## Security model
 

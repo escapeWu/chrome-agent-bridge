@@ -31,6 +31,7 @@ test("MCP server exposes the expected narrow tool surface", async (context) => {
   assert.deepEqual(
     tools.map((tool) => tool.name).sort(),
     [
+      "browser_act",
       "browser_activate_tab",
       "browser_cdp_attach",
       "browser_cdp_detach",
@@ -59,6 +60,10 @@ test("MCP server exposes the expected narrow tool surface", async (context) => {
 
   const rawAttach = tools.find((tool) => tool.name === "browser_cdp_attach");
   assert.equal(rawAttach.inputSchema.properties.captureEvents.default, true);
+
+  const pageAct = tools.find((tool) => tool.name === "browser_act");
+  assert.deepEqual(pageAct.inputSchema.properties.kind.enum, ["click", "fill", "press", "select"]);
+  assert.equal(pageAct.inputSchema.properties.ref.pattern, "^e\\d+$");
 
   const status = await client.callTool({ name: "browser_status", arguments: {} });
   assert.equal(status.isError, true);

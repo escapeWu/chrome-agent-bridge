@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-bridge",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "A local Chrome Native Messaging to MCP bridge for user-approved browser automation.",
   "type": "module",
   "private": true,

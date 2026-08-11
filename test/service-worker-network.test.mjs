@@ -33,7 +33,7 @@ test("network monitor returns sanitized metadata and detaches cleanly", async ()
     runtime: {
       id: "hkedmoboloodflgcaidimhddljdnndcd",
       connectNative: () => port,
-      getManifest: () => ({ version: "0.6.0" }),
+      getManifest: () => ({ version: "0.7.0" }),
       onInstalled: passiveEvent(),
       onStartup: passiveEvent(),
       onMessage: passiveEvent(),
@@ -192,7 +192,7 @@ test("network monitor is isolated to its selected tab", async () => {
     runtime: {
       id: "hkedmoboloodflgcaidimhddljdnndcd",
       connectNative: () => port,
-      getManifest: () => ({ version: "0.6.0" }),
+      getManifest: () => ({ version: "0.7.0" }),
       onInstalled: passiveEvent(),
       onStartup: passiveEvent(),
       onMessage: passiveEvent(),
