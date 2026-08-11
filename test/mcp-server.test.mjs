@@ -33,6 +33,7 @@ test("MCP server exposes the expected narrow tool surface", async (context) => {
     [
       "browser_activate_tab",
       "browser_click",
+      "browser_close_tab",
       "browser_fill",
       "browser_list_tabs",
       "browser_navigate",
@@ -40,6 +41,7 @@ test("MCP server exposes the expected narrow tool surface", async (context) => {
       "browser_screenshot",
       "browser_snapshot",
       "browser_status",
+      "browser_watch_events",
     ],
   );
 

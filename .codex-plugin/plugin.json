@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Control user-approved Chrome tabs through a local MCP bridge.",
   "author": {
     "name": "梧桐",

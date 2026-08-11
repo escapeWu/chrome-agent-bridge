@@ -6,7 +6,7 @@ import { BridgeOfflineError, callBridge } from "../lib/bridge-client.mjs";
 
 const server = new McpServer({
   name: "chrome-agent-bridge",
-  version: "0.1.0",
+  version: "0.2.0",
 });
 
 function asText(value) {
@@ -92,6 +92,16 @@ tool(
 );
 
 tool(
+  "browser_close_tab",
+  {
+    title: "Close bridge-created Chrome tab",
+    description: "Close a tab only when it was created by Chrome Agent Bridge in the current extension session.",
+    inputSchema: { tabId: z.number().int().nonnegative() },
+  },
+  async (input) => asText(await callBridge("tabs.close", input)),
+);
+
+tool(
   "browser_navigate",
   {
     title: "Navigate Chrome tab",
@@ -167,6 +177,20 @@ tool(
     },
   },
   async (input) => asText(await callBridge("page.fill", input)),
+);
+
+tool(
+  "browser_watch_events",
+  {
+    title: "Watch Chrome tab events",
+    description: "Long-poll tab created, updated, removed, and activated events after a cursor.",
+    inputSchema: {
+      afterSequence: z.number().int().nonnegative().optional().default(0),
+      tabId: z.number().int().nonnegative().optional().describe("Return only events for this tab."),
+      timeoutMs: z.number().int().min(0).max(25_000).optional().default(10_000),
+    },
+  },
+  async (input) => asText(await callBridge("events.poll", input, { timeoutMs: input.timeoutMs + 5_000 })),
 );
 
 await server.connect(new StdioServerTransport());

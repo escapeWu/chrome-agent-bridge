@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { HOST_NAME } from "../lib/config.mjs";
+import { bridgeDirectory, HOST_NAME } from "../lib/config.mjs";
 
 function candidates() {
   return [
@@ -21,7 +21,7 @@ function candidates() {
 }
 
 let removed = 0;
-for (const candidate of candidates()) {
+for (const candidate of [...candidates(), path.join(bridgeDirectory(), "native-host-launcher")]) {
   try {
     await fs.unlink(candidate);
     process.stdout.write(`Removed ${candidate}\n`);

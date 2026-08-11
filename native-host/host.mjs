@@ -8,7 +8,12 @@ import { encodeNativeMessage, NativeMessageDecoder } from "../lib/native-messagi
 
 const token = crypto.randomBytes(32).toString("hex");
 const pending = new Map();
+const eventBuffer = [];
+const eventWaiters = new Set();
 let nextRequestId = 1;
+let eventSequence = 0;
+let extensionVersion = "0.0.0";
+let previousTabs = null;
 let cleanedUp = false;
 
 function log(message) {
@@ -41,9 +46,136 @@ function forwardToExtension(method, params) {
   });
 }
 
+function eventTabId(event) {
+  return event?.data?.tabId ?? event?.data?.id ?? event?.data?.tab?.id;
+}
+
+function eventResult(afterSequence, tabId) {
+  const earliestSequence = eventBuffer[0]?.sequence ?? eventSequence + 1;
+  const events = eventBuffer.filter(
+    (event) => event.sequence > afterSequence && (tabId == null || eventTabId(event) === tabId),
+  );
+  return {
+    cursor: eventSequence,
+    events,
+    truncated: afterSequence < earliestSequence - 1,
+  };
+}
+
+function pollParameters(params) {
+  const afterSequence = Number(params?.afterSequence ?? 0);
+  const timeoutMs = Number(params?.timeoutMs ?? 10_000);
+  const tabId = params?.tabId == null ? undefined : Number(params.tabId);
+  if (!Number.isInteger(afterSequence) || afterSequence < 0) {
+    const error = new Error("afterSequence must be a non-negative integer");
+    error.code = "invalid_request";
+    throw error;
+  }
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 25_000) {
+    const error = new Error("timeoutMs must be an integer from 0 to 25000");
+    error.code = "invalid_request";
+    throw error;
+  }
+  if (tabId != null && (!Number.isInteger(tabId) || tabId < 0)) {
+    const error = new Error("tabId must be a non-negative integer when provided");
+    error.code = "invalid_request";
+    throw error;
+  }
+  return { afterSequence, timeoutMs, tabId };
+}
+
+function supportsPushedEvents() {
+  const [major, minor] = extensionVersion.split(".").map(Number);
+  return major > 0 || minor >= 2;
+}
+
+function waitForPushedEvents(afterSequence, timeoutMs, tabId) {
+
+  const current = eventResult(afterSequence, tabId);
+  if (current.events.length > 0 || timeoutMs === 0) return Promise.resolve(current);
+  return new Promise((resolve) => {
+    const waiter = { afterSequence, tabId, resolve };
+    waiter.timeout = setTimeout(() => {
+      eventWaiters.delete(waiter);
+      resolve(eventResult(afterSequence, tabId));
+    }, timeoutMs);
+    eventWaiters.add(waiter);
+  });
+}
+
+function tabChanged(before, after) {
+  return (
+    before.active !== after.active ||
+    before.title !== after.title ||
+    before.url !== after.url ||
+    before.windowId !== after.windowId
+  );
+}
+
+async function refreshTabSnapshot() {
+  const tabs = await forwardToExtension("tabs.list", {});
+  const currentTabs = new Map(tabs.map((tab) => [tab.id, tab]));
+  if (previousTabs == null) {
+    previousTabs = currentTabs;
+    return;
+  }
+
+  for (const [tabId, tab] of currentTabs) {
+    const previous = previousTabs.get(tabId);
+    if (previous == null) recordEvent("tab.created", tab);
+    else if (tabChanged(previous, tab)) {
+      recordEvent("tab.updated", { tabId, tab, previousTab: previous, source: "snapshot" });
+    }
+  }
+  for (const [tabId, tab] of previousTabs) {
+    if (!currentTabs.has(tabId)) recordEvent("tab.removed", { tabId, tab, source: "snapshot" });
+  }
+  previousTabs = currentTabs;
+}
+
+async function pollSnapshotEvents(afterSequence, timeoutMs, tabId) {
+  const deadline = Date.now() + timeoutMs;
+  await refreshTabSnapshot();
+  let current = eventResult(afterSequence, tabId);
+  if (current.events.length > 0 || timeoutMs === 0) return current;
+
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, Math.min(500, deadline - Date.now())));
+    await refreshTabSnapshot();
+    current = eventResult(afterSequence, tabId);
+    if (current.events.length > 0) return current;
+  }
+  return eventResult(afterSequence, tabId);
+}
+
+function pollEvents(params) {
+  const { afterSequence, timeoutMs, tabId } = pollParameters(params);
+  return supportsPushedEvents()
+    ? waitForPushedEvents(afterSequence, timeoutMs, tabId)
+    : pollSnapshotEvents(afterSequence, timeoutMs, tabId);
+}
+
+function recordEvent(event, data) {
+  eventSequence += 1;
+  eventBuffer.push({ sequence: eventSequence, event, data, observedAt: new Date().toISOString() });
+  if (eventBuffer.length > 500) eventBuffer.splice(0, eventBuffer.length - 500);
+  for (const waiter of [...eventWaiters]) {
+    const result = eventResult(waiter.afterSequence, waiter.tabId);
+    if (result.events.length === 0) continue;
+    eventWaiters.delete(waiter);
+    clearTimeout(waiter.timeout);
+    waiter.resolve(result);
+  }
+}
+
 function handleExtensionMessage(message) {
   if (message?.type === "hello") {
-    sendNative({ type: "hello", ok: true, host: "chrome-agent-bridge", version: "0.1.0" });
+    extensionVersion = typeof message.extensionVersion === "string" ? message.extensionVersion : "0.0.0";
+    sendNative({ type: "hello", ok: true, host: "chrome-agent-bridge", version: "0.2.0" });
+    return;
+  }
+  if (message?.type === "event" && typeof message.event === "string") {
+    recordEvent(message.event, message.data ?? {});
     return;
   }
   if (message?.type !== "response" || typeof message.id !== "string") return;
@@ -100,7 +232,10 @@ const server = http.createServer(async (request, response) => {
         error.code = "invalid_request";
         throw error;
       }
-      const result = await forwardToExtension(payload.method, payload.params ?? {});
+      const result =
+        payload.method === "events.poll"
+          ? await pollEvents(payload.params ?? {})
+          : await forwardToExtension(payload.method, payload.params ?? {});
       response.statusCode = 200;
       response.end(JSON.stringify({ ok: true, result }));
     } catch (error) {
@@ -128,7 +263,7 @@ server.listen(0, "127.0.0.1", async () => {
     }, null, 2)}\n`,
     { mode: 0o600 },
   );
-  sendNative({ type: "ready", ok: true, version: "0.1.0" });
+  sendNative({ type: "ready", ok: true, version: "0.2.0" });
 });
 
 async function cleanup() {
@@ -139,6 +274,11 @@ async function cleanup() {
     reject(new Error("Native host disconnected"));
   }
   pending.clear();
+  for (const waiter of eventWaiters) {
+    clearTimeout(waiter.timeout);
+    waiter.resolve(eventResult(waiter.afterSequence, waiter.tabId));
+  }
+  eventWaiters.clear();
   server.close();
   try {
     const current = JSON.parse(await fs.readFile(runtimeFile(), "utf8"));

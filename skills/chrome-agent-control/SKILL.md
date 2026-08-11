@@ -20,6 +20,7 @@ Use the `chrome-agent-bridge` MCP tools for tasks that require the user's existi
 3. Use `browser_click` or `browser_fill` for one intentional action at a time.
 4. Re-read the cheapest authoritative state after every action that may change the page.
 5. Use `browser_screenshot` when visual layout matters; use `browser_snapshot` for text, controls, and selectors.
+6. Use `browser_watch_events` with the returned cursor and `tabId` to wait for tab creation, activation, navigation, title, and loading-state changes without unrelated-tab noise.
 
 ## Safety
 

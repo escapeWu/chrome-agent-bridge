@@ -25,4 +25,7 @@ test("host installer dry-run emits a valid native host manifest", async () => {
     "chrome-extension://abcdefghijklmnopabcdefghijklmnop/",
   ]);
   assert.ok(path.isAbsolute(result.manifest.path));
+  assert.ok(path.isAbsolute(result.nodePath));
+  assert.ok(path.isAbsolute(result.hostModulePath));
+  assert.match(result.manifest.path, /native-host-launcher$/);
 });

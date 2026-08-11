@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { HOST_NAME } from "../lib/config.mjs";
+import { bridgeDirectory, HOST_NAME } from "../lib/config.mjs";
 
 function parseArgs(argv) {
   const result = { dryRun: false };
@@ -40,7 +40,8 @@ function manifestPath() {
 
 const args = parseArgs(process.argv.slice(2));
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const hostPath = path.join(projectRoot, "bin", "chrome-agent-bridge-host");
+const hostModulePath = path.join(projectRoot, "native-host", "host.mjs");
+const hostPath = path.join(bridgeDirectory(), "native-host-launcher");
 const target = manifestPath();
 const manifest = {
   name: HOST_NAME,
@@ -51,10 +52,20 @@ const manifest = {
 };
 
 if (args.dryRun) {
-  process.stdout.write(`${JSON.stringify({ target, manifest }, null, 2)}\n`);
+  process.stdout.write(
+    `${JSON.stringify({ target, manifest, nodePath: process.execPath, hostModulePath }, null, 2)}\n`,
+  );
 } else {
+  const shellQuote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
+  const launcher = [
+    "#!/bin/sh",
+    "set -eu",
+    `exec ${shellQuote(process.execPath)} ${shellQuote(hostModulePath)}`,
+    "",
+  ].join("\n");
+  await fs.mkdir(path.dirname(hostPath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(hostPath, launcher, { mode: 0o700 });
   await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.chmod(hostPath, 0o755);
   await fs.writeFile(target, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o644 });
   process.stdout.write(`Installed native host manifest: ${target}\n`);
   process.stdout.write("Reload the Chrome extension to connect.\n");

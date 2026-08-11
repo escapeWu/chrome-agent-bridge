@@ -3,6 +3,7 @@ const MAX_SNAPSHOT_CHARS = 50_000;
 let nativePort = null;
 let reconnectTimer = null;
 let reconnectDelayMs = 1_000;
+const createdTabIds = new Set();
 
 function errorPayload(error, fallbackCode = "extension_error") {
   return {
@@ -56,6 +57,15 @@ async function handleNativeMessage(message, port) {
       ok: false,
       error: errorPayload(error),
     });
+  }
+}
+
+function emitBrowserEvent(event, data) {
+  if (!nativePort) return;
+  try {
+    nativePort.postMessage({ type: "event", event, data });
+  } catch {
+    // The disconnect handler schedules reconnection.
   }
 }
 
@@ -237,7 +247,17 @@ async function dispatch(method, params) {
     }
     case "tabs.create": {
       const tab = await chrome.tabs.create({ url: safeUrl(params.url || "about:blank"), active: params.active !== false });
+      if (Number.isInteger(tab.id)) createdTabIds.add(tab.id);
       return publicTab(tab);
+    }
+    case "tabs.close": {
+      await requireTab(params.tabId);
+      if (!createdTabIds.has(params.tabId)) {
+        throw codedError("tab_not_owned", "Only tabs created by Chrome Agent Bridge can be closed");
+      }
+      await chrome.tabs.remove(params.tabId);
+      createdTabIds.delete(params.tabId);
+      return { closed: true, tabId: params.tabId };
     }
     case "tabs.activate":
       return activateTab(params.tabId);
@@ -265,4 +285,21 @@ async function dispatch(method, params) {
 chrome.runtime.onInstalled.addListener(connect);
 chrome.runtime.onStartup.addListener(connect);
 chrome.action.onClicked.addListener(connect);
+chrome.tabs.onCreated.addListener((tab) => emitBrowserEvent("tab.created", publicTab(tab)));
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) =>
+  emitBrowserEvent("tab.updated", {
+    tabId,
+    changeInfo: {
+      status: changeInfo.status,
+      title: changeInfo.title,
+      url: changeInfo.url,
+    },
+    tab: publicTab(tab),
+  }),
+);
+chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  createdTabIds.delete(tabId);
+  emitBrowserEvent("tab.removed", { tabId, ...removeInfo });
+});
+chrome.tabs.onActivated.addListener((activeInfo) => emitBrowserEvent("tab.activated", activeInfo));
 connect();

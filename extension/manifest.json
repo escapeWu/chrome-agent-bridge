@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Chrome Agent Bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Expose user-approved Chrome tabs to local MCP agents.",
   "permissions": [
     "activeTab",
@@ -10,9 +10,7 @@
     "tabs"
   ],
   "host_permissions": [
-    "http://*/*",
-    "https://*/*",
-    "file:///*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "service-worker.js",

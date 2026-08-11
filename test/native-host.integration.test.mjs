@@ -50,6 +50,9 @@ test("native host forwards authenticated loopback RPC to the extension stream", 
   }
 
   await nextMessage((message) => message.type === "ready");
+  child.stdin.write(
+    encodeNativeMessage({ type: "hello", extensionVersion: "0.2.0" }),
+  );
   const runtime = JSON.parse(await fs.readFile(path.join(bridgeDir, "runtime.json"), "utf8"));
 
   const rpcPromise = fetch(`http://127.0.0.1:${runtime.port}/rpc`, {
@@ -78,6 +81,30 @@ test("native host forwards authenticated loopback RPC to the extension stream", 
     ok: true,
     result: { connected: true, extensionVersion: "test" },
   });
+
+  child.stdin.write(
+    encodeNativeMessage({
+      type: "event",
+      event: "tab.updated",
+      data: { tabId: 42, changeInfo: { status: "complete" } },
+    }),
+  );
+  const eventsResponse = await fetch(`http://127.0.0.1:${runtime.port}/rpc`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${runtime.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      method: "events.poll",
+      params: { afterSequence: 0, tabId: 42, timeoutMs: 0 },
+    }),
+  });
+  const eventsPayload = await eventsResponse.json();
+  assert.equal(eventsPayload.ok, true);
+  assert.equal(eventsPayload.result.cursor, 1);
+  assert.equal(eventsPayload.result.events[0].event, "tab.updated");
+  assert.equal(eventsPayload.result.events[0].data.tabId, 42);
 
   child.stdin.end();
 });

@@ -11,7 +11,7 @@ Agent → MCP server → authenticated loopback RPC → Native Messaging host
       → Chrome extension → tabs / scripting / screenshots
 ```
 
-The MCP surface is intentionally narrow: list, open, activate, and navigate tabs; read a visible snapshot; take a screenshot; click; and fill non-password fields. It does not expose cookies, passwords, browser storage, arbitrary JavaScript, or raw CDP.
+The MCP surface is intentionally narrow: list, open, activate, navigate, watch, and safely close bridge-created tabs; read a visible snapshot; take a screenshot; click; and fill non-password fields. It does not expose cookies, passwords, browser storage, arbitrary JavaScript, or raw CDP.
 
 ## Requirements
 
@@ -62,17 +62,20 @@ The repository is also a Codex plugin: `.codex-plugin/plugin.json` registers the
 - `browser_list_tabs`
 - `browser_open_tab`
 - `browser_activate_tab`
+- `browser_close_tab`
 - `browser_navigate`
 - `browser_snapshot`
 - `browser_screenshot`
 - `browser_click`
 - `browser_fill`
+- `browser_watch_events`
 
 Call `browser_snapshot` before clicking or filling. Use selectors from the latest snapshot and verify state again after each action.
 
 ## Security model
 
 - Native Messaging only accepts the extension ID placed in the installed host manifest.
+- The installer generates a private launcher containing absolute Node.js and host paths, so Chrome does not depend on the terminal's `PATH`.
 - The native host listens on `127.0.0.1` with a random per-process bearer token.
 - Runtime connection data is stored in `~/.chrome-agent-bridge/runtime.json` with user-only permissions.
 - Password inputs are rejected in the extension.

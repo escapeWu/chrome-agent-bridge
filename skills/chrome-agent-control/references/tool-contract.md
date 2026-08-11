@@ -6,11 +6,13 @@
 - `browser_list_tabs`: List current HTTP, HTTPS, file, and `about:blank` tabs.
 - `browser_open_tab`: Open a safe URL in a new tab.
 - `browser_activate_tab`: Make a tab active and focus its window.
+- `browser_close_tab`: Close a tab created by the bridge in the current extension session. Pre-existing tabs are rejected.
 - `browser_navigate`: Navigate an existing tab to a safe URL.
 - `browser_snapshot`: Return visible text and interactive elements with CSS selectors.
 - `browser_screenshot`: Capture the visible viewport of a tab.
 - `browser_click`: Click one visible, enabled element selected from a fresh snapshot. Form submitters require `confirmed=true` after explicit user confirmation.
 - `browser_fill`: Fill one visible text field. Password fields are always rejected.
+- `browser_watch_events`: Long-poll tab lifecycle and navigation events after a sequence cursor. Pass `tabId` when monitoring one tab in a busy browser.
 
 ## URL policy
 
