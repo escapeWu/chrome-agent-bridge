@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+globalThis.crypto ??= webcrypto;
 
 function event() {
   return { listener: null, addListener(listener) { this.listener = listener; } };
