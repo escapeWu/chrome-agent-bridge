@@ -303,18 +303,23 @@ function integerParameter(value, name, { defaultValue, min, max }) {
   return parsed;
 }
 
-function sanitizeNetworkUrl(value) {
+function sanitizeNetworkUrl(value, urlMode = "origin_path") {
   try {
     const url = new URL(String(value));
     if (!["http:", "https:", "ws:", "wss:"].includes(url.protocol)) return `${url.protocol}`;
     url.username = "";
     url.password = "";
-    url.search = "";
+    if (urlMode !== "full") url.search = "";
     url.hash = "";
     return url.href;
   } catch {
     return "[unparseable-url]";
   }
+}
+
+function networkDurationMs(startedAt, endedAt) {
+  if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt) || endedAt < startedAt) return undefined;
+  return Number(((endedAt - startedAt) * 1_000).toFixed(3));
 }
 
 function publicRequestId(session, requestId) {
@@ -327,35 +332,40 @@ function publicRequestId(session, requestId) {
   return publicId;
 }
 
-function networkEventFor(session, method, params) {
-  const requestKey = String(params?.requestId ?? "");
+function networkEventFor(session, method, params, source) {
+  const sourceKey = typeof source?.sessionId === "string" ? source.sessionId : "root";
+  const requestKey = `${sourceKey}:${String(params?.requestId ?? "")}`;
   const known = session.requestMetadata.get(requestKey) || {};
   switch (method) {
     case "Network.requestWillBeSent": {
-      const url = sanitizeNetworkUrl(params?.request?.url);
+      const url = sanitizeNetworkUrl(params?.request?.url, session.urlMode);
       const resourceType = String(params?.type || "Other").toLowerCase();
-      session.requestMetadata.set(requestKey, { url, resourceType });
+      const method = String(params?.request?.method || "GET").slice(0, 32);
+      const startedAt = Number.isFinite(params?.timestamp) ? params.timestamp : undefined;
+      session.requestMetadata.set(requestKey, { url, resourceType, method, startedAt });
       return {
         kind: "request",
         requestId: publicRequestId(session, requestKey),
         url,
-        method: String(params?.request?.method || "GET").slice(0, 32),
+        method,
         resourceType,
         initiator: {
           type: String(params?.initiator?.type || "other").slice(0, 32),
-          ...(params?.initiator?.url ? { url: sanitizeNetworkUrl(params.initiator.url) } : {}),
+          ...(params?.initiator?.url ? { url: sanitizeNetworkUrl(params.initiator.url, session.urlMode) } : {}),
         },
       };
     }
     case "Network.responseReceived": {
-      const url = sanitizeNetworkUrl(params?.response?.url);
+      const url = sanitizeNetworkUrl(params?.response?.url, session.urlMode);
       const resourceType = String(params?.type || known.resourceType || "Other").toLowerCase();
-      session.requestMetadata.set(requestKey, { url, resourceType });
+      const status = Number.isFinite(params?.response?.status) ? params.response.status : undefined;
+      session.requestMetadata.set(requestKey, { ...known, url, resourceType, status });
       return {
         kind: "response",
         requestId: publicRequestId(session, requestKey),
         url,
-        status: Number.isFinite(params?.response?.status) ? params.response.status : undefined,
+        method: known.method,
+        status,
         mimeType: String(params?.response?.mimeType || "").slice(0, 160),
         protocol: String(params?.response?.protocol || "").slice(0, 40),
         resourceType,
@@ -369,7 +379,10 @@ function networkEventFor(session, method, params) {
         kind: "finished",
         requestId,
         url: known.url,
+        method: known.method,
+        status: known.status,
         resourceType: known.resourceType || "other",
+        durationMs: networkDurationMs(known.startedAt, params?.timestamp),
         encodedDataLength: Number.isFinite(params?.encodedDataLength)
           ? Math.max(0, params.encodedDataLength)
           : undefined,
@@ -384,7 +397,10 @@ function networkEventFor(session, method, params) {
         kind: "failed",
         requestId,
         url: known.url,
+        method: known.method,
+        status: known.status,
         resourceType: known.resourceType || "other",
+        durationMs: networkDurationMs(known.startedAt, params?.timestamp),
         errorText: String(params?.errorText || "Network request failed").slice(0, 240),
         canceled: Boolean(params?.canceled),
         blockedReason: params?.blockedReason
@@ -396,7 +412,7 @@ function networkEventFor(session, method, params) {
       return event;
     }
     case "Network.webSocketCreated": {
-      const url = sanitizeNetworkUrl(params?.url);
+      const url = sanitizeNetworkUrl(params?.url, session.urlMode);
       session.requestMetadata.set(requestKey, { url, resourceType: "websocket" });
       return {
         kind: "websocket-created",
@@ -507,7 +523,17 @@ async function startNetworkSession(params) {
   if (existing?.state === "running") {
     throw codedError("network_session_exists", `A network session is already running for tab ${params.tabId}`);
   }
-  if (rawSessionByTabId.has(params.tabId)) {
+  let rawSession = null;
+  if (params.rawSessionId != null) {
+    rawSession = requireRawSession(params.rawSessionId);
+    if (rawSession.state !== "running") {
+      throw codedError("raw_session_detached", `Raw CDP session is ${rawSession.state}`);
+    }
+    if (rawSession.tabId !== params.tabId) {
+      throw codedError("raw_target_not_found", "rawSessionId is attached to a different tab");
+    }
+  }
+  if (rawSessionByTabId.has(params.tabId) && !rawSession) {
     throw codedError("debugger_target_busy", `A Raw CDP session already owns tab ${params.tabId}`);
   }
 
@@ -536,6 +562,10 @@ async function startNetworkSession(params) {
   if (urlIncludes.length > 20 || urlIncludes.some((value) => typeof value !== "string" || value.length > 200)) {
     throw codedError("invalid_request", "urlIncludes must contain at most 20 strings of 200 characters or fewer");
   }
+  const urlMode = params.urlMode == null ? "origin_path" : params.urlMode;
+  if (!["origin_path", "full"].includes(urlMode)) {
+    throw codedError("invalid_request", "urlMode must be origin_path or full");
+  }
 
   const session = {
     id: `net_${crypto.randomUUID()}`,
@@ -546,6 +576,9 @@ async function startNetworkSession(params) {
     maxBytes,
     resourceTypes,
     urlIncludes,
+    urlMode,
+    attachmentOwner: rawSession ? "raw" : "network",
+    rawSessionId: rawSession?.id,
     events: [],
     totalBytes: 0,
     latestCursor: 0,
@@ -557,8 +590,10 @@ async function startNetworkSession(params) {
   };
   let attached = false;
   try {
-    await chrome.debugger.attach({ tabId: params.tabId }, CDP_PROTOCOL_VERSION);
-    attached = true;
+    if (!rawSession) {
+      await chrome.debugger.attach({ tabId: params.tabId }, CDP_PROTOCOL_VERSION);
+      attached = true;
+    }
     await chrome.debugger.sendCommand({ tabId: params.tabId }, "Network.enable", {
       maxTotalBufferSize: maxBytes,
       maxResourceBufferSize: Math.min(maxBytes, 1_000_000),
@@ -586,6 +621,9 @@ async function startNetworkSession(params) {
     cursor: 0,
     createdAt: session.createdAt,
     limits: { maxEvents, maxBytes },
+    urlMode,
+    attachmentOwner: session.attachmentOwner,
+    ...(session.rawSessionId ? { rawSessionId: session.rawSessionId } : {}),
   };
 }
 
@@ -625,7 +663,7 @@ async function stopNetworkSession(params) {
   if (session.state !== "stopped") {
     const wasRunning = session.state === "running";
     session.state = "stopping";
-    if (wasRunning) {
+    if (wasRunning && session.attachmentOwner === "network") {
       try {
         await chrome.debugger.sendCommand({ tabId: session.tabId }, "Network.disable");
       } catch {
@@ -651,24 +689,28 @@ async function stopNetworkSession(params) {
   };
 }
 
+function markNetworkSessionDetached(tabId) {
+  const sessionId = networkSessionByTabId.get(tabId);
+  const session = sessionId ? networkSessions.get(sessionId) : null;
+  if (!session) return;
+  session.state = "detached";
+  networkSessionByTabId.delete(tabId);
+  resolveNetworkWaiters(session);
+}
+
 function handleDebuggerEvent(source, method, params) {
-  if (handleRawDebuggerEvent(source, method, params)) return;
+  handleRawDebuggerEvent(source, method, params);
   if (!Number.isInteger(source?.tabId)) return;
   const sessionId = networkSessionByTabId.get(source.tabId);
   const session = sessionId ? networkSessions.get(sessionId) : null;
   if (!session || session.state !== "running") return;
-  recordNetworkEvent(session, networkEventFor(session, method, params ?? {}));
+  recordNetworkEvent(session, networkEventFor(session, method, params ?? {}, source));
 }
 
 function handleDebuggerDetach(source) {
-  if (handleRawDebuggerDetach(source)) return;
+  const handledRaw = handleRawDebuggerDetach(source);
   if (!Number.isInteger(source?.tabId)) return;
-  const sessionId = networkSessionByTabId.get(source.tabId);
-  const session = sessionId ? networkSessions.get(sessionId) : null;
-  if (!session) return;
-  session.state = "detached";
-  networkSessionByTabId.delete(source.tabId);
-  resolveNetworkWaiters(session);
+  if (!handledRaw) markNetworkSessionDetached(source.tabId);
 }
 
 function requireRawSession(sessionId) {
@@ -694,6 +736,7 @@ function rawPollResult(session, afterCursor, limit) {
     hasMore: matching.length > selected.length,
     truncated: afterCursor < earliestCursor - 1,
     dropped: session.dropped,
+    captureEvents: session.captureEvents,
   };
 }
 
@@ -763,6 +806,7 @@ async function attachRawSession(params) {
     min: 65_536,
     max: MAX_RAW_BYTES,
   });
+  const captureEvents = params.captureEvents !== false;
   const session = {
     id: `raw_${crypto.randomUUID()}`,
     tabId: tab.id,
@@ -776,6 +820,7 @@ async function attachRawSession(params) {
     dropped: 0,
     waiters: new Set(),
     childSessionIds: new Set(),
+    captureEvents,
   };
   try {
     await chrome.debugger.attach({ tabId: session.tabId }, CDP_PROTOCOL_VERSION);
@@ -795,6 +840,7 @@ async function attachRawSession(params) {
     cursor: 0,
     createdAt: session.createdAt,
     limits: { maxEvents, maxBytes, maxResultBytes: MAX_RAW_RESULT_BYTES },
+    captureEvents,
   };
 }
 
@@ -874,6 +920,7 @@ async function detachRawSession(params) {
   if (session.state !== "stopped") {
     const wasRunning = session.state === "running";
     session.state = "stopping";
+    markNetworkSessionDetached(session.tabId);
     if (wasRunning) {
       try {
         await chrome.debugger.detach({ tabId: session.tabId });
@@ -913,18 +960,19 @@ function handleRawDebuggerEvent(source, method, params) {
   if (!session || session.state !== "running") return false;
   if (method === "Target.attachedToTarget") registerRawChildSession(session, params?.sessionId);
   if (method === "Target.detachedFromTarget") unregisterRawChildSession(session, params?.sessionId);
-  recordRawEvent(session, source, method, params ?? {});
+  if (session.captureEvents) recordRawEvent(session, source, method, params ?? {});
   return true;
 }
 
 function handleRawDebuggerDetach(source) {
   const session = rawSessionForSource(source);
   if (!session) return false;
-  if (typeof source?.sessionId === "string" && !Number.isInteger(source?.tabId)) {
+  if (typeof source?.sessionId === "string") {
     unregisterRawChildSession(session, source.sessionId);
     return true;
   }
   session.state = "detached";
+  markNetworkSessionDetached(session.tabId);
   rawSessionByTabId.delete(session.tabId);
   for (const childSessionId of session.childSessionIds) {
     unregisterRawChildSession(session, childSessionId);

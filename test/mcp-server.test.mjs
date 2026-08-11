@@ -52,6 +52,14 @@ test("MCP server exposes the expected narrow tool surface", async (context) => {
     ],
   );
 
+  const networkStart = tools.find((tool) => tool.name === "browser_network_start");
+  assert.equal(networkStart.inputSchema.properties.rawSessionId.type, "string");
+  assert.equal(networkStart.inputSchema.properties.urlMode.default, "origin_path");
+  assert.deepEqual(networkStart.inputSchema.properties.urlMode.enum, ["origin_path", "full"]);
+
+  const rawAttach = tools.find((tool) => tool.name === "browser_cdp_attach");
+  assert.equal(rawAttach.inputSchema.properties.captureEvents.default, true);
+
   const status = await client.callTool({ name: "browser_status", arguments: {} });
   assert.equal(status.isError, true);
   assert.match(status.content[0].text, /bridge_offline/);

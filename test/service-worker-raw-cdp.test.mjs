@@ -31,7 +31,7 @@ function chromeHarness() {
     runtime: {
       id: "hkedmoboloodflgcaidimhddljdnndcd",
       connectNative: () => port,
-      getManifest: () => ({ version: "0.5.0" }),
+      getManifest: () => ({ version: "0.6.0" }),
       onInstalled: passiveEvent(),
       onStartup: passiveEvent(),
       onMessage: passiveEvent(),
@@ -194,6 +194,143 @@ test("Raw CDP event buffers are bounded and report truncation", async () => {
     assert.equal(events.result.events[0].method, "Test.second");
     assert.equal(events.result.dropped, 1);
     assert.equal(events.result.truncated, true);
+  } finally {
+    globalThis.chrome = previousChrome;
+  }
+});
+
+test("Raw CDP commands share one attachment with a sanitized network projection", async () => {
+  const harness = chromeHarness();
+  const previousChrome = globalThis.chrome;
+  globalThis.chrome = harness.chrome;
+
+  try {
+    await import(`${pathToFileURL(path.join(root, "extension/service-worker.js"))}?raw-network=${Date.now()}`);
+    const attached = await request(harness, "raw-attach-projected", "raw.attach", {
+      tabId: 42,
+      captureEvents: false,
+    });
+    assert.equal(attached.ok, true);
+    assert.equal(attached.result.captureEvents, false);
+
+    const started = await request(harness, "network-start-projected", "network.start", {
+      tabId: 42,
+      rawSessionId: attached.result.sessionId,
+      urlMode: "full",
+      resourceTypes: ["fetch"],
+    });
+    assert.equal(started.ok, true);
+    assert.equal(started.result.attachmentOwner, "raw");
+    assert.equal(started.result.rawSessionId, attached.result.sessionId);
+    assert.equal(harness.debuggerCalls.filter((call) => call[0] === "attach").length, 1);
+
+    harness.debuggerEvent.listener(
+      { tabId: 42 },
+      "Network.requestWillBeSent",
+      {
+        requestId: "private-projected-request-id",
+        timestamp: 20,
+        type: "Fetch",
+        request: {
+          method: "POST",
+          url: "https://username:password@example.com/api?token=query-secret#fragment-secret",
+          headers: { Authorization: "Bearer header-secret", Cookie: "cookie-secret" },
+          postData: "private-body",
+        },
+        initiator: { type: "script" },
+      },
+    );
+    harness.debuggerEvent.listener(
+      { tabId: 42 },
+      "Network.requestWillBeSentExtraInfo",
+      {
+        requestId: "private-projected-request-id",
+        headers: { Authorization: "Bearer extra-header-secret", Cookie: "extra-cookie-secret" },
+      },
+    );
+    harness.debuggerEvent.listener(
+      { tabId: 42 },
+      "Network.responseReceived",
+      {
+        requestId: "private-projected-request-id",
+        timestamp: 20.05,
+        type: "Fetch",
+        response: {
+          url: "https://example.com/api?token=query-secret#response-fragment",
+          status: 204,
+          mimeType: "application/json",
+          protocol: "h2",
+          headers: { "Set-Cookie": "response-cookie-secret" },
+        },
+      },
+    );
+    harness.debuggerEvent.listener(
+      { tabId: 42 },
+      "Network.loadingFinished",
+      { requestId: "private-projected-request-id", timestamp: 20.2, encodedDataLength: 64 },
+    );
+
+    const projected = await request(harness, "network-poll-projected", "network.poll", {
+      sessionId: started.result.sessionId,
+      afterCursor: 0,
+      timeoutMs: 0,
+    });
+    assert.equal(projected.ok, true);
+    assert.equal(projected.result.events.length, 3);
+    assert.equal(projected.result.events[0].url, "https://example.com/api?token=query-secret");
+    assert.deepEqual(
+      {
+        method: projected.result.events[2].method,
+        status: projected.result.events[2].status,
+        durationMs: projected.result.events[2].durationMs,
+      },
+      { method: "POST", status: 204, durationMs: 200 },
+    );
+    const projectedJson = JSON.stringify(projected.result);
+    for (const forbidden of [
+      "password",
+      "fragment-secret",
+      "header-secret",
+      "cookie-secret",
+      "private-body",
+      "private-projected-request-id",
+    ]) {
+      assert.equal(projectedJson.includes(forbidden), false, `leaked projected value ${forbidden}`);
+    }
+
+    const rawEvents = await request(harness, "raw-events-disabled", "raw.poll", {
+      sessionId: attached.result.sessionId,
+      afterCursor: 0,
+      timeoutMs: 0,
+    });
+    assert.equal(rawEvents.ok, true);
+    assert.equal(rawEvents.result.captureEvents, false);
+    assert.deepEqual(rawEvents.result.events, []);
+
+    const detachCountBeforeStop = harness.debuggerCalls.filter((call) => call[0] === "detach").length;
+    const stopped = await request(harness, "network-stop-projected", "network.stop", {
+      sessionId: started.result.sessionId,
+    });
+    assert.equal(stopped.ok, true);
+    assert.equal(harness.debuggerCalls.filter((call) => call[0] === "detach").length, detachCountBeforeStop);
+    assert.equal(harness.debuggerCalls.some((call) => call[0] === "command" && call[2] === "Network.disable"), false);
+
+    const restarted = await request(harness, "network-restart-projected", "network.start", {
+      tabId: 42,
+      rawSessionId: attached.result.sessionId,
+    });
+    const detached = await request(harness, "raw-detach-projected", "raw.detach", {
+      sessionId: attached.result.sessionId,
+    });
+    assert.equal(detached.ok, true);
+    assert.equal(harness.debuggerCalls.filter((call) => call[0] === "detach").length, 1);
+
+    const afterDetach = await request(harness, "network-poll-after-raw-detach", "network.poll", {
+      sessionId: restarted.result.sessionId,
+      afterCursor: 0,
+      timeoutMs: 0,
+    });
+    assert.equal(afterDetach.result.state, "detached");
   } finally {
     globalThis.chrome = previousChrome;
   }
