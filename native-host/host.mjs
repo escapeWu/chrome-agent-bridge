@@ -3,10 +3,15 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import process from "node:process";
+import {
+  loadOrCreateAuthState,
+  renewAuthState,
+  writePrivateJsonAtomic,
+} from "../lib/auth-token.mjs";
 import { bridgeDirectory, DEFAULT_TIMEOUT_MS, runtimeFile } from "../lib/config.mjs";
 import { encodeNativeMessage, NativeMessageDecoder } from "../lib/native-messaging.mjs";
 
-const token = crypto.randomBytes(32).toString("hex");
+let authState = await loadOrCreateAuthState();
 const pending = new Map();
 const eventBuffer = [];
 const eventWaiters = new Set();
@@ -15,6 +20,7 @@ let eventSequence = 0;
 let extensionVersion = "0.0.0";
 let previousTabs = null;
 let cleanedUp = false;
+let runtimeIdentity = null;
 
 function log(message) {
   process.stderr.write(`[chrome-agent-bridge] ${message}\n`);
@@ -29,6 +35,43 @@ function serializeError(error, fallbackCode = "bridge_error") {
     code: typeof error?.code === "string" ? error.code : fallbackCode,
     message: error instanceof Error ? error.message : String(error),
   };
+}
+
+function isAuthorized(header, expectedToken) {
+  const prefix = "Bearer ";
+  const provided = typeof header === "string" && header.startsWith(prefix)
+    ? header.slice(prefix.length)
+    : "";
+  const expectedBuffer = Buffer.from(expectedToken);
+  const providedBuffer = Buffer.from(provided);
+  return (
+    expectedBuffer.length === providedBuffer.length &&
+    crypto.timingSafeEqual(expectedBuffer, providedBuffer)
+  );
+}
+
+function publicAuthState() {
+  return {
+    token: authState.token,
+    createdAt: authState.createdAt,
+    rotatedAt: authState.rotatedAt,
+  };
+}
+
+async function handleAuthRequest(message) {
+  if (typeof message.id !== "string") return;
+  try {
+    if (message.action === "renew") {
+      authState = await renewAuthState();
+    } else if (message.action !== "get") {
+      const error = new Error(`Unsupported auth action: ${message.action}`);
+      error.code = "auth_action_invalid";
+      throw error;
+    } else authState = await loadOrCreateAuthState();
+    sendNative({ type: "auth.response", id: message.id, ok: true, result: publicAuthState() });
+  } catch (error) {
+    sendNative({ type: "auth.response", id: message.id, ok: false, error: serializeError(error) });
+  }
 }
 
 function forwardToExtension(method, params) {
@@ -169,9 +212,13 @@ function recordEvent(event, data) {
 }
 
 function handleExtensionMessage(message) {
+  if (message?.type === "auth.request") {
+    void handleAuthRequest(message);
+    return;
+  }
   if (message?.type === "hello") {
     extensionVersion = typeof message.extensionVersion === "string" ? message.extensionVersion : "0.0.0";
-    sendNative({ type: "hello", ok: true, host: "chrome-agent-bridge", version: "0.2.0" });
+    sendNative({ type: "hello", ok: true, host: "chrome-agent-bridge", version: "0.3.0" });
     return;
   }
   if (message?.type === "event" && typeof message.event === "string") {
@@ -212,7 +259,14 @@ const server = http.createServer(async (request, response) => {
     response.end(JSON.stringify({ ok: false, error: { code: "not_found", message: "Not found" } }));
     return;
   }
-  if (request.headers.authorization !== `Bearer ${token}`) {
+  try {
+    authState = await loadOrCreateAuthState();
+  } catch (error) {
+    response.statusCode = 500;
+    response.end(JSON.stringify({ ok: false, error: serializeError(error, "auth_file_invalid") }));
+    return;
+  }
+  if (!isAuthorized(request.headers.authorization, authState.token)) {
     response.statusCode = 401;
     response.end(JSON.stringify({ ok: false, error: { code: "unauthorized", message: "Unauthorized" } }));
     return;
@@ -251,19 +305,15 @@ server.listen(0, "127.0.0.1", async () => {
 
   const directory = bridgeDirectory();
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  await fs.writeFile(
-    runtimeFile(),
-    `${JSON.stringify({
-      schemaVersion: 1,
+  runtimeIdentity = {
+    schemaVersion: 2,
       host: "127.0.0.1",
       port: address.port,
-      token,
       pid: process.pid,
       startedAt: new Date().toISOString(),
-    }, null, 2)}\n`,
-    { mode: 0o600 },
-  );
-  sendNative({ type: "ready", ok: true, version: "0.2.0" });
+  };
+  await writePrivateJsonAtomic(runtimeFile(), runtimeIdentity);
+  sendNative({ type: "ready", ok: true, version: "0.3.0" });
 });
 
 async function cleanup() {
@@ -282,7 +332,9 @@ async function cleanup() {
   server.close();
   try {
     const current = JSON.parse(await fs.readFile(runtimeFile(), "utf8"));
-    if (current?.token === token) await fs.unlink(runtimeFile());
+    if (current?.pid === runtimeIdentity?.pid && current?.port === runtimeIdentity?.port) {
+      await fs.unlink(runtimeFile());
+    }
   } catch (error) {
     if (error?.code !== "ENOENT") log(`Cleanup warning: ${error.message}`);
   }

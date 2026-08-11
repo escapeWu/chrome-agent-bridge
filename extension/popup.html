@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Chrome Agent Bridge</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="icons/icon48.png" width="42" height="42" alt="">
+        <div>
+          <h1>Chrome Agent Bridge</h1>
+          <p id="connection" class="status pending">Connecting to local bridge…</p>
+        </div>
+      </header>
+
+      <section class="token-card" aria-labelledby="token-heading">
+        <div class="section-title">
+          <h2 id="token-heading">Local authentication token</h2>
+          <button id="toggle" class="text-button" type="button" disabled>Show</button>
+        </div>
+        <code id="token" aria-live="polite">Unavailable</code>
+        <p id="rotated">The token stays valid until you renew it.</p>
+        <div class="actions">
+          <button id="copy" class="primary" type="button" disabled>Copy token</button>
+          <button id="renew" class="danger" type="button" disabled>Renew</button>
+        </div>
+      </section>
+
+      <p id="notice" class="notice" aria-live="polite">
+        Stored only on this computer. Treat it like a password.
+      </p>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

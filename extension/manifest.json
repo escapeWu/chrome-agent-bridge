@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Chrome Agent Bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmb2Rf7DdTvBN7AmbBkvQvSeeB8tP+P4aibvowxiU0uG04PdQmyYTDljmB5FGFaI3d/Zy2wTmUxl2A2atmTdl6R/FAoa1m4mumE+BupIcaRldbK8IUAN5ubUhlod3Y2CWZdlMMlGT0W5aspS0GVb+JTfYxMealniNS8fvEnOynY2NF65oBnxkTfc+LTHyQoV79Am/zpRzkVHvp8+lmH8X1z/eNlKp7QEcRRlgWldHUdSLPl/MT7C39WBiG9ZzdXY7dgrDGFBLOWUoCGrJ7olM4ioAMX7SNLIYHTaFkgVgxQcvW/Y0YjvCFfSTfoywPFeOcWHwF7WRxcZsT8IoP6BQ2QIDAQAB",
   "description": "Expose user-approved Chrome tabs to local MCP agents.",
   "permissions": [
     "activeTab",
@@ -24,6 +25,7 @@
   },
   "action": {
     "default_title": "Connect Chrome Agent Bridge",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

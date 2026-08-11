@@ -4,17 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { bridgeDirectory, HOST_NAME } from "../lib/config.mjs";
+import { bridgeDirectory, EXTENSION_ID, HOST_NAME } from "../lib/config.mjs";
 
 function parseArgs(argv) {
-  const result = { dryRun: false };
+  const result = { dryRun: false, extensionId: EXTENSION_ID };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--extension-id") result.extensionId = argv[++index];
     else if (arg === "--dry-run") result.dryRun = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
-  if (!/^[a-p]{32}$/.test(result.extensionId || "")) {
+  if (!/^[a-p]{32}$/.test(result.extensionId)) {
     throw new Error("Pass a valid Chrome extension ID with --extension-id <32 characters a-p>");
   }
   return result;

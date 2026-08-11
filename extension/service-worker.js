@@ -1,9 +1,12 @@
 const HOST_NAME = "com.escape_wu.chrome_agent_bridge";
 const MAX_SNAPSHOT_CHARS = 50_000;
+const AUTH_REQUEST_TIMEOUT_MS = 5_000;
 let nativePort = null;
 let reconnectTimer = null;
 let reconnectDelayMs = 1_000;
+let nextAuthRequestId = 1;
 const createdTabIds = new Set();
+const pendingAuthRequests = new Map();
 
 function errorPayload(error, fallbackCode = "extension_error") {
   return {
@@ -18,6 +21,14 @@ function codedError(code, message) {
   return error;
 }
 
+function rejectPendingAuthRequests(message) {
+  for (const { reject, timeout } of pendingAuthRequests.values()) {
+    clearTimeout(timeout);
+    reject(codedError("bridge_offline", message));
+  }
+  pendingAuthRequests.clear();
+}
+
 function connect() {
   if (nativePort) return;
   try {
@@ -27,6 +38,7 @@ function connect() {
     port.onMessage.addListener((message) => void handleNativeMessage(message, port));
     port.onDisconnect.addListener(() => {
       nativePort = null;
+      rejectPendingAuthRequests("Native host disconnected");
       scheduleReconnect();
     });
     port.postMessage({ type: "hello", extensionVersion: chrome.runtime.getManifest().version });
@@ -46,6 +58,15 @@ function scheduleReconnect() {
 }
 
 async function handleNativeMessage(message, port) {
+  if (message?.type === "auth.response" && typeof message.id === "string") {
+    const request = pendingAuthRequests.get(message.id);
+    if (!request) return;
+    pendingAuthRequests.delete(message.id);
+    clearTimeout(request.timeout);
+    if (message.ok === true) request.resolve(message.result);
+    else request.reject(codedError(message?.error?.code || "auth_error", message?.error?.message || "Authentication request failed"));
+    return;
+  }
   if (message?.type !== "request" || typeof message.id !== "string") return;
   try {
     const result = await dispatch(message.method, message.params ?? {});
@@ -58,6 +79,28 @@ async function handleNativeMessage(message, port) {
       error: errorPayload(error),
     });
   }
+}
+
+function requestAuth(action) {
+  connect();
+  if (!nativePort) {
+    return Promise.reject(codedError("bridge_offline", "Native host is not available"));
+  }
+  const id = `auth-${nextAuthRequestId++}`;
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingAuthRequests.delete(id);
+      reject(codedError("auth_timeout", "Authentication request timed out"));
+    }, AUTH_REQUEST_TIMEOUT_MS);
+    pendingAuthRequests.set(id, { resolve, reject, timeout });
+    try {
+      nativePort.postMessage({ type: "auth.request", id, action });
+    } catch (error) {
+      clearTimeout(timeout);
+      pendingAuthRequests.delete(id);
+      reject(codedError("bridge_offline", error instanceof Error ? error.message : String(error)));
+    }
+  });
 }
 
 function emitBrowserEvent(event, data) {
@@ -285,6 +328,20 @@ async function dispatch(method, params) {
 chrome.runtime.onInstalled.addListener(connect);
 chrome.runtime.onStartup.addListener(connect);
 chrome.action.onClicked.addListener(connect);
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id) return false;
+  const action = message?.type === "auth.get"
+    ? "get"
+    : message?.type === "auth.renew"
+      ? "renew"
+      : null;
+  if (!action) return false;
+  void requestAuth(action).then(
+    (result) => sendResponse({ ok: true, result }),
+    (error) => sendResponse({ ok: false, error: errorPayload(error, "auth_error") }),
+  );
+  return true;
+});
 chrome.tabs.onCreated.addListener((tab) => emitBrowserEvent("tab.created", publicTab(tab)));
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) =>
   emitBrowserEvent("tab.updated", {

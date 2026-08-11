@@ -20,7 +20,8 @@ The extension accepts `http:`, `https:`, `file:`, and `about:blank`. Chrome may 
 
 ## Recovery
 
-- For `bridge_offline`, ask the user to open Chrome and click the extension once.
+- For `bridge_offline`, verify the unpacked release is loaded, install the native host with `npm run install-host`, ask the user to reload the extension, then retry `browser_status`.
+- For `unauthorized`, do not request the token in chat. Local installations should reread `~/.chrome-agent-bridge/auth.json` automatically; separately configured agents must receive the popup token through `CHROME_AGENT_BRIDGE_TOKEN`. Renew in the popup if the old token may be stale or exposed.
 - For `tab_not_found`, refresh the tab list and select again.
 - For `selector_not_found`, take a fresh snapshot and choose a current selector.
 - For `restricted_page`, ask the user to open a normal web page.

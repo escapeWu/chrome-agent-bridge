@@ -1,0 +1,45 @@
+name: Release extension ZIP
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vX.Y.Z tag to release
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Resolve release tag
+        id: release
+        env:
+          PUSH_TAG: ${{ github.ref_name }}
+          MANUAL_TAG: ${{ inputs.tag }}
+        run: echo "tag=${MANUAL_TAG:-$PUSH_TAG}" >> "$GITHUB_OUTPUT"
+      - run: node scripts/check-release-version.mjs "${{ steps.release.outputs.tag }}"
+      - run: npm run build:extension
+      - run: sha256sum dist/*.zip > dist/SHA256SUMS.txt
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${{ steps.release.outputs.tag }}" dist/*.zip dist/SHA256SUMS.txt
+          --generate-notes
+          --notes "Install: download the attached Extension ZIP, extract it, then select the extracted directory from chrome://extensions → Developer mode → Load unpacked."
+          --verify-tag

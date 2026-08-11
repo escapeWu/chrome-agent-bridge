@@ -9,7 +9,8 @@
       ],
       "cwd": ".",
       "env_vars": [
-        "CHROME_AGENT_BRIDGE_DIR"
+        "CHROME_AGENT_BRIDGE_DIR",
+        "CHROME_AGENT_BRIDGE_TOKEN"
       ]
     }
   }

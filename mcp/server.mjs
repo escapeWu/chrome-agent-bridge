@@ -6,7 +6,7 @@ import { BridgeOfflineError, callBridge } from "../lib/bridge-client.mjs";
 
 const server = new McpServer({
   name: "chrome-agent-bridge",
-  version: "0.2.0",
+  version: "0.3.0",
 });
 
 function asText(value) {
@@ -29,8 +29,10 @@ function asError(error) {
             message: error instanceof Error ? error.message : String(error),
             recovery:
               code === "bridge_offline"
-                ? "Open Chrome and click the Chrome Agent Bridge extension once, then retry."
-                : "Inspect current browser state before retrying.",
+                ? "Ensure the unpacked extension and native host are installed, reload the extension, then retry."
+                : code === "unauthorized"
+                  ? "Reload the local token or renew it from the extension popup, then retry."
+                  : "Inspect current browser state before retrying.",
           },
         }, null, 2),
       },

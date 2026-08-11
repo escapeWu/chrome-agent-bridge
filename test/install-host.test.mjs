@@ -13,8 +13,6 @@ test("host installer dry-run emits a valid native host manifest", async () => {
     process.execPath,
     [
       path.join(root, "scripts", "install-host.mjs"),
-      "--extension-id",
-      "abcdefghijklmnopabcdefghijklmnop",
       "--dry-run",
     ],
   );
@@ -22,7 +20,7 @@ test("host installer dry-run emits a valid native host manifest", async () => {
   assert.equal(result.manifest.type, "stdio");
   assert.equal(result.manifest.name, "com.escape_wu.chrome_agent_bridge");
   assert.deepEqual(result.manifest.allowed_origins, [
-    "chrome-extension://abcdefghijklmnopabcdefghijklmnop/",
+    "chrome-extension://hkedmoboloodflgcaidimhddljdnndcd/",
   ]);
   assert.ok(path.isAbsolute(result.manifest.path));
   assert.ok(path.isAbsolute(result.nodePath));

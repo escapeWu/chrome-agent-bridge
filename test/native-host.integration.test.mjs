@@ -51,14 +51,39 @@ test("native host forwards authenticated loopback RPC to the extension stream", 
 
   await nextMessage((message) => message.type === "ready");
   child.stdin.write(
-    encodeNativeMessage({ type: "hello", extensionVersion: "0.2.0" }),
+    encodeNativeMessage({ type: "hello", extensionVersion: "0.3.0" }),
   );
   const runtime = JSON.parse(await fs.readFile(path.join(bridgeDir, "runtime.json"), "utf8"));
+  const initialAuth = JSON.parse(await fs.readFile(path.join(bridgeDir, "auth.json"), "utf8"));
+  assert.equal(runtime.schemaVersion, 2);
+  assert.equal("token" in runtime, false);
+
+  child.stdin.write(encodeNativeMessage({ type: "auth.request", id: "auth-get", action: "get" }));
+  const getAuth = await nextMessage((message) => message.type === "auth.response" && message.id === "auth-get");
+  assert.equal(getAuth.ok, true);
+  assert.equal(getAuth.result.token, initialAuth.token);
+
+  child.stdin.write(encodeNativeMessage({ type: "auth.request", id: "auth-renew", action: "renew" }));
+  const renewAuth = await nextMessage((message) => message.type === "auth.response" && message.id === "auth-renew");
+  assert.equal(renewAuth.ok, true);
+  assert.notEqual(renewAuth.result.token, initialAuth.token);
+  const persistedAuth = JSON.parse(await fs.readFile(path.join(bridgeDir, "auth.json"), "utf8"));
+  assert.equal(persistedAuth.token, renewAuth.result.token);
+
+  const rejected = await fetch(`http://127.0.0.1:${runtime.port}/rpc`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${initialAuth.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ method: "browser.status", params: {} }),
+  });
+  assert.equal(rejected.status, 401);
 
   const rpcPromise = fetch(`http://127.0.0.1:${runtime.port}/rpc`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${runtime.token}`,
+      authorization: `Bearer ${renewAuth.result.token}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({ method: "browser.status", params: {} }),
@@ -92,7 +117,7 @@ test("native host forwards authenticated loopback RPC to the extension stream", 
   const eventsResponse = await fetch(`http://127.0.0.1:${runtime.port}/rpc`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${runtime.token}`,
+      authorization: `Bearer ${renewAuth.result.token}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
