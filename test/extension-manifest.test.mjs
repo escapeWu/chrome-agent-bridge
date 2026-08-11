@@ -21,4 +21,19 @@ test("extension manifest requests only the documented capability set", async () 
   assert.equal(manifest.permissions.includes("history"), false);
   assert.equal(manifest.permissions.includes("debugger"), false);
   assert.deepEqual(manifest.host_permissions, ["<all_urls>"]);
+
+  const expectedIcons = {
+    16: "icons/icon16.png",
+    32: "icons/icon32.png",
+    48: "icons/icon48.png",
+    128: "icons/icon128.png",
+  };
+  assert.deepEqual(manifest.icons, expectedIcons);
+  assert.deepEqual(manifest.action.default_icon, expectedIcons);
+
+  await Promise.all(
+    Object.values(expectedIcons).map((iconPath) =>
+      fs.access(path.join(root, "extension", iconPath)),
+    ),
+  );
 });

@@ -1,5 +1,9 @@
 # Chrome Agent Bridge
 
+<p align="center">
+  <img src="./assets/chrome-agent-bridge-icon-512.png" width="160" alt="Chrome Agent Bridge icon">
+</p>
+
 Chrome Agent Bridge is a small, local bridge that lets MCP-compatible agents interact with user-approved Google Chrome tabs. It is a clean-room, MIT-licensed implementation built from public Chrome Native Messaging and Model Context Protocol APIs.
 
 It does not contain or redistribute OpenAI's proprietary Chrome extension, browser client, or native host.
@@ -38,6 +42,22 @@ npm run install-host -- --extension-id YOUR_EXTENSION_ID
 ```
 
 Reload the extension. Click its toolbar icon once if the native connection has not started.
+
+## Agent quick start
+
+Agents can use this section as an installation and connection checklist:
+
+1. Verify Node.js 18+ and Google Chrome are installed.
+2. Run `npm install` in the repository root.
+3. Ask the user to open `chrome://extensions`, enable **Developer mode**, load the repository's `extension/` directory, and provide the resulting extension ID. Chrome requires this user-visible approval step.
+4. Run `npm run install-host -- --extension-id EXTENSION_ID` with the exact ID.
+5. Ask the user to reload **Chrome Agent Bridge** on `chrome://extensions` after source or manifest changes.
+6. Add `mcp/server.mjs` to the agent's MCP configuration using an absolute filesystem path, or install this repository as a Codex plugin.
+7. Call `browser_status`, then `browser_list_tabs`. Do not begin browser actions until the bridge reports connected.
+
+For page interaction, take a fresh `browser_snapshot` before every click or fill and use selectors from that snapshot. For monitoring, call `browser_watch_events` with the previous cursor and, when useful, a specific `tabId`. Treat `bridge_offline`, `tab_not_found`, and `selector_not_found` as recoverable state: reconnect or refresh the snapshot instead of guessing.
+
+Never submit forms, purchase, publish, delete, send messages, or change permissions without the user's explicit approval. The bridge intentionally rejects password fields and does not expose cookies or browser storage.
 
 ## Connect an MCP agent
 
