@@ -24,6 +24,8 @@ const networkSessionByTabId = new Map();
 const rawSessions = new Map();
 const rawSessionByTabId = new Map();
 const rawSessionByChildSessionId = new Map();
+const pageSnapshotsByTabId = new Map();
+const pageActionChains = new Map();
 
 function errorPayload(error, fallbackCode = "extension_error") {
   return {
@@ -186,19 +188,31 @@ async function execute(tabId, func, args = []) {
 }
 
 function snapshotPage(maxChars) {
+  const interactiveRoles = new Set([
+    "button", "checkbox", "combobox", "link", "listbox", "menuitem",
+    "menuitemcheckbox", "menuitemradio", "option", "radio", "searchbox",
+    "slider", "spinbutton", "switch", "tab", "textbox", "treeitem",
+  ]);
+  const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
   const isVisible = (element) => {
+    if (element.closest("[aria-hidden='true'],[inert]")) return false;
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
-    return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+    return style.visibility !== "hidden" && style.display !== "none" && style.opacity !== "0" &&
+      rect.width > 0 && rect.height > 0;
   };
 
   const selectorFor = (element) => {
     if (element.id) return `#${CSS.escape(element.id)}`;
+    const testId = element.getAttribute("data-testid");
+    if (testId) return `[data-testid="${CSS.escape(testId)}"]`;
     const segments = [];
     let current = element;
-    while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.body) {
+    while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.body && segments.length < 8) {
       const tag = current.tagName.toLowerCase();
-      const siblings = [...current.parentElement.children].filter((child) => child.tagName === current.tagName);
+      const siblings = current.parentElement
+        ? [...current.parentElement.children].filter((child) => child.tagName === current.tagName)
+        : [];
       const suffix = siblings.length > 1 ? `:nth-of-type(${siblings.indexOf(current) + 1})` : "";
       segments.unshift(`${tag}${suffix}`);
       current = current.parentElement;
@@ -206,93 +220,527 @@ function snapshotPage(maxChars) {
     return segments.join(" > ");
   };
 
-  const interactiveSelector = [
-    "a[href]",
-    "button",
-    "input",
-    "select",
-    "textarea",
-    "[role='button']",
-    "[contenteditable='true']",
-  ].join(",");
+  const implicitRole = (element) => {
+    const tag = element.tagName.toLowerCase();
+    if (tag === "a" && element.hasAttribute("href")) return "link";
+    if (tag === "button" || tag === "summary") return "button";
+    if (tag === "select") return element.multiple || element.size > 1 ? "listbox" : "combobox";
+    if (tag === "textarea" || element.isContentEditable) return "textbox";
+    if (tag !== "input") return "";
+    const type = String(element.type || "text").toLowerCase();
+    if (["button", "submit", "reset", "image"].includes(type)) return "button";
+    if (type === "checkbox") return "checkbox";
+    if (type === "radio") return "radio";
+    if (type === "range") return "slider";
+    if (type === "number") return "spinbutton";
+    if (type === "search") return "searchbox";
+    if (type === "hidden") return "";
+    return "textbox";
+  };
 
-  const elements = [...document.querySelectorAll(interactiveSelector)]
-    .filter(isVisible)
-    .slice(0, 500)
-    .map((element, index) => ({
-      index,
-      selector: selectorFor(element),
+  const accessibleName = (element) => {
+    const labelledBy = normalize(element.getAttribute("aria-labelledby"));
+    const labelledText = labelledBy
+      ? labelledBy.split(" ").map((id) => normalize(document.getElementById(id)?.textContent)).filter(Boolean).join(" ")
+      : "";
+    const labels = element.labels ? [...element.labels].map((label) => normalize(label.textContent)).filter(Boolean).join(" ") : "";
+    const inputValue = element instanceof HTMLInputElement && ["button", "submit", "reset"].includes(element.type)
+      ? element.value
+      : "";
+    return normalize(
+      element.getAttribute("aria-label") || labelledText || labels || element.getAttribute("alt") ||
+      inputValue || element.innerText || element.getAttribute("placeholder") ||
+      element.getAttribute("title") || element.getAttribute("name") || "",
+    ).slice(0, 160);
+  };
+
+  const roleSelector = [...interactiveRoles].map((role) => `[role="${role}"]`).join(",");
+  const interactiveSelector = [
+    "a[href]", "button", "summary", "input:not([type='hidden'])", "select", "textarea",
+    "[contenteditable='true']", "[tabindex]:not([tabindex='-1'])", roleSelector,
+  ].join(",");
+  const roleNameCounts = new Map();
+  const snapshotLines = [];
+  const elements = [];
+
+  for (const element of [...document.querySelectorAll(interactiveSelector)].filter(isVisible).slice(0, 500)) {
+    const role = element.getAttribute("role") || implicitRole(element) || "generic";
+    if (element.hasAttribute("role") && !interactiveRoles.has(role) && !element.matches("[tabindex]:not([tabindex='-1'])")) {
+      continue;
+    }
+    const name = accessibleName(element);
+    const countKey = `${role}\u0000${name}`;
+    const nth = roleNameCounts.get(countKey) || 0;
+    roleNameCounts.set(countKey, nth + 1);
+    const ref = `e${elements.length + 1}`;
+    const selector = selectorFor(element);
+    const disabled = Boolean(element.disabled || element.getAttribute("aria-disabled") === "true");
+    const checked = typeof element.checked === "boolean" ? element.checked : undefined;
+    const selected = element.getAttribute("aria-selected") === "true" ||
+      (element instanceof HTMLOptionElement ? element.selected : undefined);
+    const expandedValue = element.getAttribute("aria-expanded");
+    const expanded = expandedValue == null ? undefined : expandedValue === "true";
+    const locator = {
+      selector,
+      role,
+      name,
+      nth,
+      id: element.id || undefined,
+      testId: element.getAttribute("data-testid") || undefined,
       tag: element.tagName.toLowerCase(),
-      role: element.getAttribute("role"),
-      type: element.getAttribute("type"),
-      name:
-        element.getAttribute("aria-label") ||
-        element.getAttribute("name") ||
-        element.innerText?.trim().slice(0, 160) ||
-        element.getAttribute("placeholder") ||
-        "",
-      disabled: Boolean(element.disabled || element.getAttribute("aria-disabled") === "true"),
-      checked: typeof element.checked === "boolean" ? element.checked : undefined,
-    }));
+      type: element.getAttribute("type") || undefined,
+    };
+    elements.push({
+      index: elements.length,
+      ref,
+      selector,
+      tag: locator.tag,
+      role,
+      type: locator.type,
+      name,
+      disabled,
+      checked,
+      selected,
+      expanded,
+      _locator: locator,
+    });
+    const states = [
+      disabled ? "disabled" : "",
+      checked === true ? "checked" : checked === false && ["checkbox", "radio", "switch"].includes(role) ? "checked=false" : "",
+      selected === true ? "selected" : "",
+      expanded === true ? "expanded" : expanded === false ? "expanded=false" : "",
+    ].filter(Boolean);
+    snapshotLines.push(`- ${role}${name ? ` "${name.replace(/"/g, '\\"')}"` : ""} [ref=${ref}]${states.length ? ` [${states.join(", ")}]` : ""}`);
+  }
 
   return {
     title: document.title,
     url: location.href,
     text: (document.body?.innerText || "").slice(0, maxChars),
     truncated: (document.body?.innerText || "").length > maxChars,
+    snapshot: snapshotLines.join("\n"),
     elements,
   };
 }
 
-function clickElement(selector, confirmed) {
-  const element = document.querySelector(selector);
-  if (!element) return { error: { code: "selector_not_found", message: `No element matches ${selector}` } };
-  const style = getComputedStyle(element);
-  const rect = element.getBoundingClientRect();
-  if (style.visibility === "hidden" || style.display === "none" || rect.width === 0 || rect.height === 0) {
-    return { error: { code: "element_not_visible", message: `Element is not visible: ${selector}` } };
+async function prepareActionTarget(locator, marker, kind, confirmed) {
+  const interactiveRoles = new Set([
+    "button", "checkbox", "combobox", "link", "listbox", "menuitem",
+    "menuitemcheckbox", "menuitemradio", "option", "radio", "searchbox",
+    "slider", "spinbutton", "switch", "tab", "textbox", "treeitem",
+  ]);
+  const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const isVisible = (element) => {
+    if (element.closest("[aria-hidden='true'],[inert]")) return false;
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.visibility !== "hidden" && style.display !== "none" && style.opacity !== "0" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const implicitRole = (element) => {
+    const tag = element.tagName.toLowerCase();
+    if (tag === "a" && element.hasAttribute("href")) return "link";
+    if (tag === "button" || tag === "summary") return "button";
+    if (tag === "select") return element.multiple || element.size > 1 ? "listbox" : "combobox";
+    if (tag === "textarea" || element.isContentEditable) return "textbox";
+    if (tag !== "input") return "";
+    const type = String(element.type || "text").toLowerCase();
+    if (["button", "submit", "reset", "image"].includes(type)) return "button";
+    if (type === "checkbox") return "checkbox";
+    if (type === "radio") return "radio";
+    if (type === "range") return "slider";
+    if (type === "number") return "spinbutton";
+    if (type === "search") return "searchbox";
+    if (type === "hidden") return "";
+    return "textbox";
+  };
+  const accessibleName = (element) => {
+    const labelledBy = normalize(element.getAttribute("aria-labelledby"));
+    const labelledText = labelledBy
+      ? labelledBy.split(" ").map((id) => normalize(document.getElementById(id)?.textContent)).filter(Boolean).join(" ")
+      : "";
+    const labels = element.labels ? [...element.labels].map((label) => normalize(label.textContent)).filter(Boolean).join(" ") : "";
+    const inputValue = element instanceof HTMLInputElement && ["button", "submit", "reset"].includes(element.type)
+      ? element.value
+      : "";
+    return normalize(
+      element.getAttribute("aria-label") || labelledText || labels || element.getAttribute("alt") ||
+      inputValue || element.innerText || element.getAttribute("placeholder") ||
+      element.getAttribute("title") || element.getAttribute("name") || "",
+    ).slice(0, 160);
+  };
+  const candidateSelector = [
+    "a[href]", "button", "summary", "input:not([type='hidden'])", "select", "textarea",
+    "[contenteditable='true']", "[tabindex]:not([tabindex='-1'])",
+    ...[...interactiveRoles].map((role) => `[role="${role}"]`),
+  ].join(",");
+  const roleMatches = locator.role
+    ? [...document.querySelectorAll(candidateSelector)].filter((element) =>
+      isVisible(element) &&
+      (element.getAttribute("role") || implicitRole(element) || "generic") === locator.role &&
+      accessibleName(element) === locator.name)
+    : [];
+  let element = roleMatches[locator.nth || 0];
+  if (!element && locator.id) element = document.getElementById(locator.id);
+  if (!element && locator.testId) {
+    element = [...document.querySelectorAll("[data-testid]")]
+      .find((candidate) => candidate.getAttribute("data-testid") === locator.testId);
+  }
+  if (!element && locator.selector) {
+    try {
+      element = document.querySelector(locator.selector);
+    } catch {
+      return { error: { code: "invalid_selector", message: `Invalid selector: ${locator.selector}` } };
+    }
+  }
+  if (!element) {
+    return { error: { code: "action_target_not_found", message: "The action target is no longer present. Take a fresh snapshot." } };
+  }
+  let rect = element.getBoundingClientRect();
+  if (!isVisible(element)) {
+    return { error: { code: "element_not_visible", message: "The action target is not visible. Take a fresh snapshot." } };
   }
   if (element.disabled || element.getAttribute("aria-disabled") === "true") {
-    return { error: { code: "element_disabled", message: `Element is disabled: ${selector}` } };
+    return { error: { code: "element_disabled", message: "The action target is disabled." } };
   }
-  const type = element.getAttribute("type")?.toLowerCase();
-  const submitsForm =
-    (element instanceof HTMLButtonElement && element.form && (!type || type === "submit")) ||
-    (element instanceof HTMLInputElement && (type === "submit" || type === "image"));
-  if (submitsForm && confirmed !== true) {
-    return {
-      error: {
-        code: "confirmation_required",
-        message: "This click may submit a form. Obtain explicit user confirmation and retry with confirmed=true.",
-      },
+  if (kind === "click") {
+    const type = element.getAttribute("type")?.toLowerCase();
+    const submitsForm =
+      (element instanceof HTMLButtonElement && element.form && (!type || type === "submit")) ||
+      (element instanceof HTMLInputElement && (type === "submit" || type === "image"));
+    if (submitsForm && confirmed !== true) {
+      return {
+        error: {
+          code: "confirmation_required",
+          message: "This click may submit a form. Obtain explicit user confirmation and retry with confirmed=true.",
+        },
+      };
+    }
+  }
+  if (kind === "fill") {
+    if (element instanceof HTMLInputElement && element.type.toLowerCase() === "password") {
+      return { error: { code: "password_field_rejected", message: "Password fields cannot be filled" } };
+    }
+    const fillable = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element.isContentEditable;
+    if (!fillable) return { error: { code: "not_fillable", message: "The action target cannot be filled." } };
+    if (element.readOnly) return { error: { code: "element_disabled", message: "The action target is read-only." } };
+  }
+  if (kind === "select" && !(element instanceof HTMLSelectElement)) {
+    return { error: { code: "not_selectable", message: "select is only for native <select> elements; click a custom option ref instead." } };
+  }
+  element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+  await new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve();
     };
+    const timeout = setTimeout(finish, 500);
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+  });
+  rect = element.getBoundingClientRect();
+  element.setAttribute("data-cab-action-target", marker);
+  if (["fill", "press", "select"].includes(kind)) element.focus();
+  const points = [
+    [rect.left + rect.width / 2, rect.top + rect.height / 2],
+    [rect.left + rect.width / 4, rect.top + rect.height / 2],
+    [rect.left + rect.width * 3 / 4, rect.top + rect.height / 2],
+    [rect.left + rect.width / 2, rect.top + rect.height / 4],
+    [rect.left + rect.width / 2, rect.top + rect.height * 3 / 4],
+  ];
+  const point = points.find(([x, y]) => {
+    const hit = document.elementFromPoint(x, y);
+    return hit && (hit === element || element.contains(hit));
+  });
+  if (kind === "click" && !point) {
+    element.removeAttribute("data-cab-action-target");
+    return { error: { code: "element_not_receiving_pointer", message: "Another element covers the action target." } };
   }
-  element.scrollIntoView({ block: "center", inline: "center" });
-  element.click();
-  return { clicked: true, selector };
+  return {
+    marker,
+    x: point?.[0],
+    y: point?.[1],
+    target: {
+      role: element.getAttribute("role") || implicitRole(element) || "generic",
+      name: accessibleName(element),
+      tag: element.tagName.toLowerCase(),
+    },
+  };
 }
 
-function fillElement(selector, value) {
-  const element = document.querySelector(selector);
-  if (!element) return { error: { code: "selector_not_found", message: `No element matches ${selector}` } };
-  if (element instanceof HTMLInputElement && element.type.toLowerCase() === "password") {
-    return { error: { code: "password_field_rejected", message: "Password fields cannot be filled" } };
-  }
-  const fillable =
-    element instanceof HTMLInputElement ||
-    element instanceof HTMLTextAreaElement ||
-    element.isContentEditable;
-  if (!fillable) return { error: { code: "not_fillable", message: `Element cannot be filled: ${selector}` } };
-  if (element.disabled || element.readOnly) {
-    return { error: { code: "element_disabled", message: `Element is disabled or read-only: ${selector}` } };
-  }
+function inspectPreparedTarget(marker, x, y) {
+  const element = document.querySelector(`[data-cab-action-target="${marker}"]`);
+  if (!element) return { ok: false, reason: "target_removed" };
+  const hit = document.elementFromPoint(x, y);
+  return {
+    ok: Boolean(hit && (hit === element || element.contains(hit))),
+    hit: hit ? { tag: hit.tagName.toLowerCase(), role: hit.getAttribute("role"), text: String(hit.innerText || "").trim().slice(0, 80) } : null,
+  };
+}
 
-  element.focus();
-  if (element.isContentEditable) element.textContent = value;
-  else element.value = value;
-  element.dispatchEvent(new Event("input", { bubbles: true }));
-  element.dispatchEvent(new Event("change", { bubbles: true }));
-  return { filled: true, selector, length: value.length };
+function performPreparedDomAction(marker, kind, value) {
+  const element = document.querySelector(`[data-cab-action-target="${marker}"]`);
+  if (!element) return { error: { code: "action_target_not_found", message: "The action target disappeared." } };
+  if (kind === "fill") {
+    if (element.isContentEditable) {
+      element.textContent = value;
+    } else {
+      const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+      if (!setter) return { error: { code: "not_fillable", message: "The action target has no native value setter." } };
+      setter.call(element, value);
+    }
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    return { filled: true, length: value.length };
+  }
+  if (kind === "select") {
+    const values = Array.isArray(value) ? value.map(String) : [String(value)];
+    const matched = [];
+    for (const option of element.options) {
+      const selected = values.includes(option.value) || values.includes(String(option.label || option.text).trim());
+      option.selected = selected;
+      if (selected) matched.push(option.value);
+      if (selected && !element.multiple) break;
+    }
+    if (matched.length === 0) {
+      return { error: { code: "option_not_found", message: "No native option matches the requested value or label." } };
+    }
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    return { selected: true, values: matched };
+  }
+  return { error: { code: "invalid_action", message: `Unsupported DOM action: ${kind}` } };
+}
+
+function cleanupPreparedTarget(marker) {
+  const element = document.querySelector(`[data-cab-action-target="${marker}"]`);
+  if (element) element.removeAttribute("data-cab-action-target");
+  return { cleaned: Boolean(element) };
+}
+
+async function snapshotTab(tabId, maxChars) {
+  const result = await execute(tabId, snapshotPage, [maxChars]);
+  const snapshotId = `snapshot_${crypto.randomUUID()}`;
+  const refs = new Map();
+  const elements = (result?.elements || []).map((element) => {
+    if (typeof element.ref === "string" && element._locator) refs.set(element.ref, element._locator);
+    const { _locator, ...publicElement } = element;
+    return publicElement;
+  });
+  pageSnapshotsByTabId.set(tabId, {
+    id: snapshotId,
+    url: result.url,
+    refs,
+    createdAt: new Date().toISOString(),
+  });
+  return {
+    ...result,
+    elements,
+    snapshotId,
+    refCount: refs.size,
+  };
+}
+
+async function actionLocator(tabId, params) {
+  if (params.ref != null) {
+    if (typeof params.ref !== "string" || !/^e\d+$/.test(params.ref)) {
+      throw codedError("invalid_ref", "ref must look like e1, e2, and so on");
+    }
+    const snapshot = pageSnapshotsByTabId.get(tabId);
+    if (!snapshot) {
+      throw codedError("stale_ref", "No current snapshot exists for this tab. Take browser_snapshot and retry.");
+    }
+    const tab = await requireTab(tabId);
+    if (tab.url !== snapshot.url) {
+      pageSnapshotsByTabId.delete(tabId);
+      throw codedError("stale_ref", "The tab navigated after the snapshot. Take a fresh browser_snapshot and retry.");
+    }
+    const locator = snapshot.refs.get(params.ref);
+    if (!locator) {
+      throw codedError("stale_ref", `Unknown ref ${params.ref}. Take a fresh browser_snapshot and retry.`);
+    }
+    return { ...locator, ref: params.ref, snapshotId: snapshot.id };
+  }
+  if (typeof params.selector === "string" && params.selector.length > 0 && params.selector.length <= 2_000) {
+    return { selector: params.selector };
+  }
+  throw codedError("invalid_action", "The action requires a ref from the latest snapshot or a CSS selector");
+}
+
+function bridgeOwnsDebugger(tabId) {
+  const rawSession = rawSessions.get(rawSessionByTabId.get(tabId));
+  if (rawSession?.state === "running") return true;
+  const networkSession = networkSessions.get(networkSessionByTabId.get(tabId));
+  return networkSession?.state === "running";
+}
+
+async function withPageDebugger(tabId, operation) {
+  if (!chrome.debugger?.attach || !chrome.debugger?.sendCommand) {
+    throw codedError("page_control_not_supported", "Chrome debugger API is unavailable");
+  }
+  const reuseAttachment = bridgeOwnsDebugger(tabId);
+  let attached = false;
+  try {
+    if (!reuseAttachment) {
+      await chrome.debugger.attach({ tabId }, CDP_PROTOCOL_VERSION);
+      attached = true;
+    }
+    return await operation({ tabId });
+  } catch (error) {
+    if (typeof error?.code === "string") throw error;
+    throw codedError("page_control_cdp_error", error instanceof Error ? error.message : String(error));
+  } finally {
+    if (attached) {
+      try {
+        await chrome.debugger.detach({ tabId });
+      } catch {
+        // The tab may have closed during the action.
+      }
+    }
+  }
+}
+
+function keyDescriptor(input) {
+  const aliases = { Space: " ", Spacebar: " ", Esc: "Escape", Down: "ArrowDown", Up: "ArrowUp", Left: "ArrowLeft", Right: "ArrowRight" };
+  const key = aliases[input] || input;
+  const known = {
+    Enter: { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" },
+    Escape: { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 },
+    Tab: { key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 },
+    ArrowDown: { key: "ArrowDown", code: "ArrowDown", windowsVirtualKeyCode: 40 },
+    ArrowUp: { key: "ArrowUp", code: "ArrowUp", windowsVirtualKeyCode: 38 },
+    ArrowLeft: { key: "ArrowLeft", code: "ArrowLeft", windowsVirtualKeyCode: 37 },
+    ArrowRight: { key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 },
+    Home: { key: "Home", code: "Home", windowsVirtualKeyCode: 36 },
+    End: { key: "End", code: "End", windowsVirtualKeyCode: 35 },
+    PageUp: { key: "PageUp", code: "PageUp", windowsVirtualKeyCode: 33 },
+    PageDown: { key: "PageDown", code: "PageDown", windowsVirtualKeyCode: 34 },
+    " ": { key: " ", code: "Space", windowsVirtualKeyCode: 32, text: " " },
+  };
+  if (known[key]) return known[key];
+  if (typeof key === "string" && [...key].length === 1) {
+    const upper = key.toUpperCase();
+    return { key, code: /^[A-Z]$/.test(upper) ? `Key${upper}` : "", windowsVirtualKeyCode: upper.codePointAt(0), text: key };
+  }
+  throw codedError("unsupported_key", `Unsupported key: ${String(input)}`);
+}
+
+function serializePageAction(tabId, operation) {
+  const previous = pageActionChains.get(tabId) || Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  pageActionChains.set(tabId, current);
+  return current.finally(() => {
+    if (pageActionChains.get(tabId) === current) pageActionChains.delete(tabId);
+  });
+}
+
+async function pageAction(params) {
+  const allowedKinds = new Set(["click", "fill", "press", "select"]);
+  if (!allowedKinds.has(params.kind)) {
+    throw codedError("invalid_action", "kind must be click, fill, press, or select");
+  }
+  const tab = await requireTab(params.tabId);
+  assertScriptable(tab);
+  return serializePageAction(params.tabId, async () => {
+    const locator = await actionLocator(params.tabId, params);
+    const marker = `cab-${crypto.randomUUID()}`;
+    let prepared = null;
+    try {
+      if (params.kind === "click") {
+        const result = await withPageDebugger(params.tabId, async (target) => {
+          for (let attempt = 1; attempt <= 2; attempt += 1) {
+            prepared = await execute(params.tabId, prepareActionTarget, [locator, marker, "click", params.confirmed === true]);
+            const hit = await execute(params.tabId, inspectPreparedTarget, [marker, prepared.x, prepared.y]);
+            if (!hit?.ok) {
+              if (attempt < 2) {
+                await execute(params.tabId, cleanupPreparedTarget, [marker]);
+                continue;
+              }
+              throw codedError("action_target_moved", `The target moved before click (${hit?.reason || "hit test changed"}). Take a fresh snapshot.`);
+            }
+            await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+              type: "mouseMoved", x: prepared.x, y: prepared.y, button: "none", buttons: 0,
+            });
+            const hovered = await execute(params.tabId, inspectPreparedTarget, [marker, prepared.x, prepared.y]);
+            if (!hovered?.ok) {
+              if (attempt < 2) {
+                await execute(params.tabId, cleanupPreparedTarget, [marker]);
+                continue;
+              }
+              throw codedError("action_target_moved", "Hover moved or covered the target before mouse press. Take a fresh snapshot.");
+            }
+            let mouseDown = false;
+            try {
+              await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+                type: "mousePressed", x: prepared.x, y: prepared.y, button: "left", buttons: 1, clickCount: 1,
+              });
+              mouseDown = true;
+              await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+                type: "mouseReleased", x: prepared.x, y: prepared.y, button: "left", buttons: 0, clickCount: 1,
+              });
+              mouseDown = false;
+              return { clicked: true, point: { x: prepared.x, y: prepared.y }, target: prepared.target, attempts: attempt };
+            } finally {
+              if (mouseDown) {
+                try {
+                  await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+                    type: "mouseReleased", x: prepared.x, y: prepared.y, button: "left", buttons: 0, clickCount: 1,
+                  });
+                } catch {
+                  // Avoid masking the original failure while releasing a potentially held button.
+                }
+              }
+            }
+          }
+          throw codedError("action_target_moved", "The click target could not be stabilized.");
+        });
+        pageSnapshotsByTabId.delete(params.tabId);
+        return { ...result, ref: params.ref, snapshotId: locator.snapshotId, needsSnapshot: true };
+      }
+
+      prepared = await execute(params.tabId, prepareActionTarget, [locator, marker, params.kind, params.confirmed === true]);
+      if (params.kind === "press") {
+        if (typeof params.key !== "string" || params.key.length === 0 || params.key.length > 40) {
+          throw codedError("invalid_action", "press requires a key string");
+        }
+        const descriptor = keyDescriptor(params.key);
+        const result = await withPageDebugger(params.tabId, async (target) => {
+          await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { type: "keyDown", ...descriptor });
+          const { text, ...keyUpDescriptor } = descriptor;
+          await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { type: "keyUp", ...keyUpDescriptor });
+          return { pressed: true, key: descriptor.key, target: prepared.target };
+        });
+        pageSnapshotsByTabId.delete(params.tabId);
+        return { ...result, ref: params.ref, snapshotId: locator.snapshotId, needsSnapshot: true };
+      }
+      if (params.kind === "fill") {
+        if (typeof params.value !== "string" || params.value.length > 100_000) {
+          throw codedError("invalid_action", "fill requires a string value of at most 100000 characters");
+        }
+        const result = await execute(params.tabId, performPreparedDomAction, [marker, "fill", params.value]);
+        pageSnapshotsByTabId.delete(params.tabId);
+        return { ...result, ref: params.ref, snapshotId: locator.snapshotId, needsSnapshot: true };
+      }
+      const values = params.values ?? (params.value == null ? null : [params.value]);
+      if (!Array.isArray(values) || values.length === 0 || values.length > 100 || values.some((value) => typeof value !== "string" || value.length > 1_000)) {
+        throw codedError("invalid_action", "select requires value or values containing 1 to 100 strings");
+      }
+      const result = await execute(params.tabId, performPreparedDomAction, [marker, "select", values]);
+      pageSnapshotsByTabId.delete(params.tabId);
+      return { ...result, ref: params.ref, snapshotId: locator.snapshotId, needsSnapshot: true };
+    } finally {
+      if (prepared) {
+        try {
+          await execute(params.tabId, cleanupPreparedTarget, [marker]);
+        } catch {
+          // Cleanup is best-effort when a successful action navigates or replaces the target.
+        }
+      }
+    }
+  });
 }
 
 function integerParameter(value, name, { defaultValue, min, max }) {
@@ -1009,10 +1457,11 @@ async function dispatch(method, params) {
       return activateTab(params.tabId);
     case "tabs.navigate": {
       await requireTab(params.tabId);
+      pageSnapshotsByTabId.delete(params.tabId);
       return publicTab(await chrome.tabs.update(params.tabId, { url: safeUrl(params.url) }));
     }
     case "page.snapshot":
-      return execute(params.tabId, snapshotPage, [Math.min(params.maxChars || MAX_SNAPSHOT_CHARS, MAX_SNAPSHOT_CHARS)]);
+      return snapshotTab(params.tabId, Math.min(params.maxChars || MAX_SNAPSHOT_CHARS, MAX_SNAPSHOT_CHARS));
     case "page.screenshot": {
       const tab = await requireTab(params.tabId);
       await activateTab(params.tabId);
@@ -1020,9 +1469,11 @@ async function dispatch(method, params) {
       return { dataUrl, tabId: params.tabId };
     }
     case "page.click":
-      return execute(params.tabId, clickElement, [params.selector, params.confirmed === true]);
+      return pageAction({ ...params, kind: "click" });
     case "page.fill":
-      return execute(params.tabId, fillElement, [params.selector, params.value]);
+      return pageAction({ ...params, kind: "fill" });
+    case "page.act":
+      return pageAction(params);
     case "network.start":
       return startNetworkSession(params);
     case "network.poll":
@@ -1060,7 +1511,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 chrome.tabs.onCreated.addListener((tab) => emitBrowserEvent("tab.created", publicTab(tab)));
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) =>
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url || changeInfo.status === "loading") pageSnapshotsByTabId.delete(tabId);
   emitBrowserEvent("tab.updated", {
     tabId,
     changeInfo: {
@@ -1069,10 +1521,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) =>
       url: changeInfo.url,
     },
     tab: publicTab(tab),
-  }),
-);
+  });
+});
 chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   createdTabIds.delete(tabId);
+  pageSnapshotsByTabId.delete(tabId);
+  pageActionChains.delete(tabId);
   const sessionId = networkSessionByTabId.get(tabId);
   const session = sessionId ? networkSessions.get(sessionId) : null;
   if (session) {

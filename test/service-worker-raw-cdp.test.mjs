@@ -31,7 +31,7 @@ function chromeHarness() {
     runtime: {
       id: "hkedmoboloodflgcaidimhddljdnndcd",
       connectNative: () => port,
-      getManifest: () => ({ version: "0.6.0" }),
+      getManifest: () => ({ version: "0.7.0" }),
       onInstalled: passiveEvent(),
       onStartup: passiveEvent(),
       onMessage: passiveEvent(),

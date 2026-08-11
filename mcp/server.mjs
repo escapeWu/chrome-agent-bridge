@@ -6,7 +6,7 @@ import { BridgeOfflineError, callBridge } from "../lib/bridge-client.mjs";
 
 const server = new McpServer({
   name: "chrome-agent-bridge",
-  version: "0.6.0",
+  version: "0.7.0",
 });
 
 function asText(value) {
@@ -120,7 +120,8 @@ tool(
   "browser_snapshot",
   {
     title: "Snapshot page",
-    description: "Read visible page text and interactive elements with CSS selectors.",
+    description:
+      "Read visible page text plus semantic interactive elements with short-lived refs. Use a ref with browser_act, then take a fresh snapshot after every action.",
     inputSchema: {
       tabId: z.number().int().nonnegative(),
       maxChars: z.number().int().min(1_000).max(50_000).optional().default(30_000),
@@ -150,10 +151,34 @@ tool(
 );
 
 tool(
+  "browser_act",
+  {
+    title: "Act on page element",
+    description:
+      "Perform one atomic high-level action. Prefer a ref from the latest browser_snapshot. Clicks run a complete CDP mouse sequence inside one request; press supports common navigation keys; select is for native <select> controls.",
+    inputSchema: {
+      tabId: z.number().int().nonnegative(),
+      kind: z.enum(["click", "fill", "press", "select"]),
+      ref: z.string().regex(/^e\d+$/).optional().describe("Short-lived ref from the latest browser_snapshot on the same tab."),
+      selector: z.string().min(1).max(2_000).optional().describe("Compatibility fallback when no snapshot ref is available."),
+      value: z.string().max(100_000).optional().describe("Required for fill; accepted as one value for select."),
+      values: z.array(z.string().max(1_000)).min(1).max(100).optional().describe("Values or labels for native select."),
+      key: z.string().min(1).max(40).optional().describe("Required for press, for example ArrowDown, Enter, Escape, Tab, or a single character."),
+      confirmed: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Set true only after explicit user confirmation for a potentially submitting click."),
+    },
+  },
+  async (input) => asText(await callBridge("page.act", input)),
+);
+
+tool(
   "browser_click",
   {
     title: "Click page element",
-    description: "Click one visible, enabled element using a selector from a recent snapshot.",
+    description: "Compatibility selector-based click. New workflows should use browser_snapshot refs with browser_act.",
     inputSchema: {
       tabId: z.number().int().nonnegative(),
       selector: z.string().min(1).max(2_000),
@@ -171,7 +196,7 @@ tool(
   "browser_fill",
   {
     title: "Fill page field",
-    description: "Fill one visible non-password text field. This tool never submits the form.",
+    description: "Compatibility selector-based fill. New workflows should use browser_snapshot refs with browser_act.",
     inputSchema: {
       tabId: z.number().int().nonnegative(),
       selector: z.string().min(1).max(2_000),

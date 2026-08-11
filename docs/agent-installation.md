@@ -102,6 +102,7 @@ The Agent should call:
 1. `browser_status` and require `connected: true`.
 2. `browser_list_tabs` and ask the user which existing tab is in scope when that is not already explicit.
 3. `browser_snapshot` before the first high-level page action.
+4. `browser_act` once with a ref from that snapshot, then take a new snapshot to verify. Never reuse a ref after an action or navigation.
 
 Do not guess a tab ID or inspect unrelated tabs.
 
@@ -123,7 +124,7 @@ An Agent using automatic local discovery normally needs no configuration change 
 For sanitized request lifecycle metadata:
 
 1. Call `browser_network_start` before the user-requested action.
-2. Perform the authorized page action.
+2. Perform the authorized page action with `browser_snapshot → browser_act(ref) → browser_snapshot`. The action engine reuses an active debugger attachment automatically.
 3. Page through `browser_network_poll` using its cursor.
 4. Always call `browser_network_stop`.
 
