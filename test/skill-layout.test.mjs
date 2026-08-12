@@ -10,10 +10,15 @@ const referencesDir = path.join(skillDir, "references");
 
 test("chrome-agent-control uses scenario-scoped progressive references", () => {
   const expectedReferences = [
+    "code-analysis.md",
     "connection-and-recovery.md",
     "network-monitoring.md",
     "page-control.md",
+    "performance-and-deep-network.md",
+    "protocol-and-wasm.md",
     "raw-cdp.md",
+    "script-debugging.md",
+    "source-maps.md",
   ];
   const skill = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
   const linkedReferences = [...skill.matchAll(/\(references\/([^)]+\.md)\)/g)]

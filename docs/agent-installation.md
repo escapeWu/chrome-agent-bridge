@@ -103,6 +103,7 @@ The Agent should call:
 2. `browser_list_tabs` and ask the user which existing tab is in scope when that is not already explicit.
 3. `browser_snapshot` before the first high-level page action.
 4. `browser_act` once with a ref from that snapshot, then take a new snapshot to verify. Never reuse a ref after an action or navigation.
+5. Confirm that a local tool such as `understand_code` appears in the MCP tool catalog. It does not need a browser connection and verifies the 0.8 analysis surface is loaded.
 
 Do not guess a tab ID or inspect unrelated tabs.
 
@@ -139,6 +140,12 @@ For Raw commands plus a safe network projection on the same tab:
 5. Call `browser_cdp_detach`, including after errors.
 
 Set `captureEvents=true` and call `browser_cdp_events` only when the task explicitly requires original unsanitized events. Do not echo or persist their secrets.
+
+The script, source-map, debugger, performance, and deep-network analysis tools reuse that same Raw session and shared cursor. Event-dependent analysis requires `captureEvents=true`. Traces and heap snapshots may need an explicitly larger `maxBytes`; the extension permits at most 64 MiB total per Raw session while keeping each event and poll response under the Native Messaging envelope. Always detach Raw after analysis so the MCP process clears its cached scripts, debugger values, and request metadata.
+
+`network_export_har` and `network_extract_auth` require `confirmed=true` because they persist or return secrets. `network_intercept` must be disabled in cleanup, including after errors, or requests may remain paused. Private trace, heap, and HAR artifacts are stored under `~/.chrome-agent-bridge/artifacts/`; remove them when the authorized task is complete.
+
+The complete 0.8 tool inventory and excluded external-service capabilities are documented in [analysis-tools.md](./analysis-tools.md). The paired Skill provides shorter scenario-specific references so Agents do not load the full catalog during ordinary work.
 
 Do not use Resource Timing, `performance.getEntriesByType("resource")`, or page-level fetch/XHR monkeypatching as the normal monitoring path. Those mechanisms are incomplete, depend on page state, may miss workers or frames, and can alter page behavior. Do not change an unrelated UI control merely to manufacture a request after monitoring started too late.
 

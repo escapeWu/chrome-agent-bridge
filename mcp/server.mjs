@@ -3,10 +3,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { BridgeOfflineError, callBridge } from "../lib/bridge-client.mjs";
+import { clearCdpAnalysisSession, registerCdpAnalysisTools } from "./register-cdp-analysis-tools.mjs";
+import { registerLocalAnalysisTools } from "./register-local-analysis-tools.mjs";
 
 const server = new McpServer({
   name: "chrome-agent-bridge",
-  version: "0.7.0",
+  version: "0.8.0",
 });
 
 function asText(value) {
@@ -292,7 +294,7 @@ tool(
       tabId: z.number().int().nonnegative(),
       captureEvents: z.boolean().optional().default(true),
       maxEvents: z.number().int().min(1).max(1_000).optional().default(500),
-      maxBytes: z.number().int().min(65_536).max(3_000_000).optional().default(1_000_000),
+      maxBytes: z.number().int().min(65_536).max(64 * 1024 * 1024).optional().default(1_000_000),
     },
   },
   async (input) => asText(await callBridge("raw.attach", input)),
@@ -339,7 +341,16 @@ tool(
     description: "Detach an unrestricted CDP session from its tab and release child-target routing state.",
     inputSchema: { sessionId: rawSessionId },
   },
-  async (input) => asText(await callBridge("raw.detach", input)),
+  async (input) => {
+    try {
+      return asText(await callBridge("raw.detach", input));
+    } finally {
+      clearCdpAnalysisSession(input.sessionId);
+    }
+  },
 );
+
+registerLocalAnalysisTools({ tool, asText });
+registerCdpAnalysisTools({ tool, asText });
 
 await server.connect(new StdioServerTransport());

@@ -199,6 +199,50 @@ test("Raw CDP event buffers are bounded and report truncation", async () => {
   }
 });
 
+test("Raw CDP supports large bounded artifact buffers while byte-bounding each poll", async () => {
+  const harness = chromeHarness();
+  const previousChrome = globalThis.chrome;
+  globalThis.chrome = harness.chrome;
+
+  try {
+    await import(`${pathToFileURL(path.join(root, "extension/service-worker.js"))}?raw-artifacts=${Date.now()}`);
+    const attached = await request(harness, "raw-attach-artifacts", "raw.attach", {
+      tabId: 8,
+      maxEvents: 100,
+      maxBytes: 64 * 1024 * 1024,
+    });
+    assert.equal(attached.ok, true);
+    assert.equal(attached.result.limits.maxBytes, 64 * 1024 * 1024);
+    assert.equal(attached.result.limits.maxPollBytes, 2_500_000);
+
+    const chunk = "x".repeat(1_400_000);
+    harness.debuggerEvent.listener({ tabId: 8 }, "HeapProfiler.addHeapSnapshotChunk", { chunk });
+    harness.debuggerEvent.listener({ tabId: 8 }, "HeapProfiler.addHeapSnapshotChunk", { chunk });
+
+    const first = await request(harness, "raw-artifacts-first", "raw.poll", {
+      sessionId: attached.result.sessionId,
+      afterCursor: 0,
+      limit: 200,
+      timeoutMs: 0,
+    });
+    assert.equal(first.ok, true);
+    assert.equal(first.result.events.length, 1);
+    assert.equal(first.result.hasMore, true);
+
+    const second = await request(harness, "raw-artifacts-second", "raw.poll", {
+      sessionId: attached.result.sessionId,
+      afterCursor: first.result.cursor,
+      limit: 200,
+      timeoutMs: 0,
+    });
+    assert.equal(second.ok, true);
+    assert.equal(second.result.events.length, 1);
+    assert.equal(second.result.hasMore, false);
+  } finally {
+    globalThis.chrome = previousChrome;
+  }
+});
+
 test("Raw CDP commands share one attachment with a sanitized network projection", async () => {
   const harness = chromeHarness();
   const previousChrome = globalThis.chrome;

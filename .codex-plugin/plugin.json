@@ -1,7 +1,7 @@
 {
   "name": "chrome-agent-bridge",
-  "version": "0.7.0",
-  "description": "Control and monitor user-approved Chrome tabs through a local MCP bridge, including safe network projections and explicit Raw CDP sessions.",
+  "version": "0.8.0",
+  "description": "Control and analyze user-approved Chrome tabs through a local MCP bridge, with local code, protocol, and WASM analysis.",
   "author": {
     "name": "梧桐",
     "url": "https://github.com/escapeWu"
@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "Chrome Agent Bridge",
     "shortDescription": "Control and monitor approved Chrome tabs through MCP.",
-    "longDescription": "A local, open-source Chrome bridge for Agents. It provides semantic page snapshots, ref-based atomic actions, screenshots, tab tools, and sanitized network monitoring, plus explicit Raw Chrome DevTools Protocol commands that can share one debugger attachment.",
+    "longDescription": "A local, open-source Chrome bridge for Agents. It provides semantic page control, sanitized monitoring, explicit Raw CDP, script and source-map analysis, debugger and profiler workflows, opt-in deep network inspection, and offline JavaScript, binary, protocol, and WASM analysis.",
     "developerName": "梧桐",
     "category": "Developer Tools",
     "capabilities": [
@@ -32,7 +32,8 @@
     "defaultPrompt": [
       "Inspect my current Chrome tab and summarize the page.",
       "Monitor requests while I perform an action in Chrome.",
-      "Use Raw CDP on the approved tab and detach when finished."
+      "Debug scripts on the approved tab and detach when finished.",
+      "Analyze this JavaScript or protocol payload locally."
     ]
   }
 }

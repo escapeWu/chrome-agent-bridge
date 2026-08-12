@@ -4,9 +4,21 @@
   <img src="./assets/chrome-agent-bridge-icon-512.png" width="160" alt="Chrome Agent Bridge icon">
 </p>
 
-Chrome Agent Bridge is a small, local bridge that lets MCP-compatible agents interact with user-approved Google Chrome tabs. It is a clean-room, MIT-licensed implementation built from public Chrome Native Messaging and Model Context Protocol APIs.
+## Project overview
 
-It does not contain or redistribute OpenAI's proprietary Chrome extension, browser client, or native host.
+Chrome Agent Bridge connects MCP-compatible Agents to the user's existing Google Chrome session. It runs locally as a Chrome extension, Native Messaging host, and stdio MCP server; it does not launch a remote browser or send browser state through a hosted bridge.
+
+The project provides:
+
+- semantic page snapshots and atomic click, fill, key, and select actions;
+- tab navigation, screenshots, and lifecycle monitoring;
+- sanitized network monitoring plus an explicit unrestricted Raw CDP channel;
+- script collection, debugging, source-map, performance, and opt-in deep-network analysis;
+- local JavaScript, binary, protocol, and WebAssembly analysis that does not require Chrome.
+
+The user approves the unpacked extension once in Chrome. Local Agents then authenticate with a long-lived token stored under `~/.chrome-agent-bridge/`. ChatGPT OAuth and the official ChatGPT Chrome extension are not required.
+
+This is a clean-room, MIT-licensed implementation. It does not contain or redistribute OpenAI's proprietary Chrome extension, browser client, native host, or authentication code.
 
 ## Architecture
 
@@ -15,11 +27,20 @@ Agent → MCP server → authenticated loopback RPC → Native Messaging host
       → Chrome extension → tabs / scripting / screenshots / sanitized network tools / Raw CDP
 ```
 
-The MCP surface has two levels. The default tools list, navigate, watch, snapshot, screenshot, act on semantic element refs, and monitor sanitized request lifecycle metadata. The explicit Raw CDP tools attach to one tab and forward arbitrary CDP methods, params, results, target sessions, and events without field sanitization. A sanitized network projection can reuse the same Raw attachment when an Agent needs Raw commands without exposing Raw network events to its context.
+The browser MCP surface has two levels. The default tools list, navigate, watch, snapshot, screenshot, act on semantic element refs, and monitor sanitized request lifecycle metadata. The explicit Raw CDP tools attach to one tab and forward arbitrary CDP methods, params, results, target sessions, and events without field sanitization. A sanitized network projection can reuse the same Raw attachment when an Agent needs Raw commands without exposing Raw network events to its context.
 
-High-level page control follows the open-source OpenClaw Browser plugin's `snapshot → ref → act → snapshot` contract while keeping this project's existing Native Messaging, token, MCP, and debugger attachment layers. OpenClaw is a design reference, not a runtime dependency; its Chrome extension is a thin CDP transport, so this project does not fork or embed that transport.
+Version 0.8 also provides clean-room local JavaScript, binary, protocol, source-map, and WASM analysis plus high-level script, debugger, profiler, trace, and opt-in deep-network projections over the existing Raw connection. These additions require no proxy, second browser, privileged service, ADB, Frida, native reverse-engineering suite, WABT, or Binaryen. See the [analysis tool catalog](./docs/analysis-tools.md).
 
 **Raw CDP is equivalent to granting the local bearer token full developer control of an attached tab.** Depending on the commands sent, it can execute JavaScript, read or modify page content, inspect cookies and storage, capture request or response bodies, intercept traffic, and control child targets. Do not expose the loopback service or token to another user or machine.
+
+## Reference projects and specifications
+
+- [OpenClaw Browser plugin](https://github.com/openclaw/openclaw/tree/3d707a9b963b91134d01b204638f87841a50787b/extensions/browser) — informed the semantic `snapshot → ref → act → snapshot` contract, interactive-role coverage, and actionability checks. OpenClaw is MIT-licensed, but it is not bundled, forked, or required at runtime.
+- [JSHookMCP](https://github.com/vmoranv/jshookmcp) — its public tool catalog was reviewed to identify useful analysis capabilities that could run without its browser, proxy, daemon, ADB, Frida, or native reverse-engineering services. The selected capabilities were independently reimplemented from public language and protocol specifications. JSHookMCP is AGPL-licensed; none of its source code is copied or bundled here.
+- [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) — provides the MCP server transport and tool registration API used by the local Agent bridge.
+- [Chrome Extensions](https://developer.chrome.com/docs/extensions/) and the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) — define the public browser, Native Messaging, debugger, page, network, runtime, and profiler contracts used by the implementation.
+
+The locally installed production ChatGPT Chrome extension was used only to understand externally observable capability boundaries. It was not treated as source code or a reusable implementation. Detailed provenance and clean-room boundaries are recorded in [docs/clean-room-browser-capabilities.md](./docs/clean-room-browser-capabilities.md) and [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 
 ## Requirements
 
@@ -103,6 +124,10 @@ The repository is also a Codex plugin: `.codex-plugin/plugin.json` registers the
 
 ## Tools
 
+The server exposes 96 tools: 19 browser primitives and 77 analysis tools grouped into three batches. The full names, prerequisites, exclusions, and recommended call chains are in [docs/analysis-tools.md](./docs/analysis-tools.md).
+
+Browser primitives:
+
 - `browser_status`
 - `browser_list_tabs`
 - `browser_open_tab`
@@ -125,6 +150,14 @@ The repository is also a Codex plugin: `.codex-plugin/plugin.json` registers the
 
 Prefer `browser_snapshot → browser_act(ref) → browser_snapshot`. `browser_click` and `browser_fill` remain selector-based compatibility tools.
 
+Analysis groups:
+
+- Local JavaScript inspection, deobfuscation, AST transforms, and bounded crypto test vectors
+- Local binary, Protobuf, HTTP/2, gRPC, protocol inference, and WASM inspection
+- Raw-backed script collection, source maps, debugger, coverage, CPU/heap profiling, tracing, exceptions, and explicitly sensitive deep-network inspection
+
+Local analysis does not require Chrome. Raw-backed analysis starts from `browser_cdp_attach({captureEvents:true})` and must end with `browser_cdp_detach`; detaching also clears that session's MCP-side analysis cache.
+
 ## Security model
 
 - Native Messaging only accepts the extension ID placed in the installed host manifest.
@@ -139,8 +172,10 @@ Prefer `browser_snapshot → browser_act(ref) → browser_snapshot`. `browser_cl
 - Network monitoring uses Chrome's user-visible `debugger` permission and attaches only to the selected tab for the lifetime of a network session.
 - Network events contain lifecycle metadata only. Userinfo, URL fragments, headers, request bodies, response bodies, security details, and raw CDP request IDs are not returned. Query strings are removed by default and preserved only with explicit `urlMode="full"` because they may contain tokens or signatures.
 - Network sessions have bounded event and byte buffers, monotonically increasing cursors, tab isolation, and explicit stop/detach behavior.
-- Raw CDP accepts any method and JSON params and returns original results and events, including sensitive fields. Raw event buffers are bounded to 3 MB and command results to 3 MB by the Native Messaging transport envelope.
+- Raw CDP accepts any method and JSON params and returns original results and events, including sensitive fields. Per-session event storage is caller-bounded up to 64 MiB and 1,000 events; individual events and poll pages are capped at 2.5 MB, and command results at 3 MB, below the 4 MiB Native Messaging envelope.
 - Set `captureEvents=false` when Raw is needed for commands but original events are not required. A sanitized network session can reuse that Raw attachment through `rawSessionId`; stopping the projection leaves Raw attached, while detaching Raw terminates its active projection.
+- Raw-backed analysis retains bounded scripts, debugger values, and request metadata only in the MCP process for the attached session. `browser_cdp_detach` clears that in-memory state. Trace, heap, and confirmed HAR exports are private local artifacts under `~/.chrome-agent-bridge/artifacts/` and remain until removed.
+- `network_export_har` and `network_extract_auth` require explicit `confirmed=true`. The latter returns live secrets; never include them in logs, commits, or normal Agent summaries.
 - Agents should require user confirmation before submitting, purchasing, publishing, deleting, sending, or changing permissions.
 
 The clean-room capability analysis and migration boundaries are documented in [docs/clean-room-browser-capabilities.md](./docs/clean-room-browser-capabilities.md).
