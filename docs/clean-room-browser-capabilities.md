@@ -30,6 +30,11 @@ Chrome Agent Bridge does not emulate that private handshake, replace the officia
 | Agent cursor and favicon status overlays | content script + Shadow DOM | Planned |
 | Viewport emulation | CDP `Emulation` domain | Planned with a narrow allowlist |
 | Generic Raw CDP, original results and events | `chrome.debugger.sendCommand` | Implemented in v0.5 as an explicit high-risk surface |
+| Script collection, search, debugger, watches, and blackboxing | Public CDP `Debugger` and `Runtime` domains | Implemented in v0.8 over the existing Raw session |
+| Source-map discovery, lookup, reconstruction, and diffing | CDP metadata + Source Map v3-compatible mappings | Implemented in v0.8; v4 scope fields are metadata, not full ECMA-426 semantics |
+| Metrics, coverage, CPU/heap profiling, heap snapshots, and tracing | Public CDP performance/profiler domains | Implemented in v0.8 with bounded private artifacts |
+| Unsanitized bodies, HAR, auth projection, and Fetch interception | Public CDP `Network` and `Fetch` domains | Implemented in v0.8 as explicit high-risk tools; HAR/auth require confirmation |
+| Local JS/AST, binary, protocol, and WASM analysis | Public language and wire-format specifications | Implemented in v0.8 without a browser or external service |
 | History, bookmarks, top sites | privileged Chrome APIs | Not planned by default due to privacy impact |
 | ChatGPT/Codex side-panel and cloud features | product-private runtime | Out of scope |
 
@@ -62,7 +67,11 @@ Raw CDP is a separate, explicit session type. It accepts arbitrary CDP method na
 
 Raw CDP can expose cookies, authorization headers, browser storage, page contents, request and response bodies, WebSocket frames, security details, and any other data returned by the chosen CDP command or event. The local authentication token must therefore be treated as a full browser-control credential.
 
-A sanitized network session can reuse an active Raw attachment on the same tab. Agents that only need Raw commands can set `captureEvents=false`, preventing original events from entering the Raw buffer, while the projected stream records only approved metadata. Each Raw session remains tab-scoped, explicitly detached, cursor-paged, and bounded to 1,000 events, a 3 MB event buffer, and a 3 MB command-result envelope. These are transport and lifecycle limits, not CDP method or field allowlists.
+A sanitized network session can reuse an active Raw attachment on the same tab. Agents that only need Raw commands can set `captureEvents=false`, preventing original events from entering the Raw buffer, while the projected stream records only approved metadata. Each Raw session remains tab-scoped, explicitly detached, cursor-paged, and bounded to 1,000 events and a caller-selected total of at most 64 MiB. Individual events and poll pages are capped at 2.5 MB, command results at 3 MB, and Native Messaging frames at 4 MiB. These are transport and lifecycle limits, not CDP method or field allowlists.
+
+The v0.8 high-level analysis tools do not create another Chrome attachment. They send public CDP commands through the selected Raw session and share one serialized event cursor inside the MCP process. Target IDs scope scripts, pauses, requests, traces, and heap chunks so child targets do not overwrite one another. Detaching Raw deletes the corresponding in-memory analysis state.
+
+Trace, heap snapshot, and confirmed HAR exports are bounded private artifacts under the user's bridge directory. HAR and authentication extraction require explicit confirmation. Source-map reconstruction returns safe relative paths as data and never writes recovered trees automatically.
 
 ## Migration principles
 
@@ -72,3 +81,5 @@ A sanitized network session can reuse an active Raw attachment on the same tab. 
 4. Reject or remove secrets at the extension boundary for high-level tools; document that Raw CDP deliberately preserves original fields.
 5. Require explicit stop/cleanup and bounded buffers for long-running observations.
 6. Add privileged capabilities in separate releases with tests and documentation.
+
+The detailed clean-room 0.8 migration inventory, including capabilities deliberately excluded because they require external services or privileged runtimes, is in [analysis-tools.md](./analysis-tools.md).

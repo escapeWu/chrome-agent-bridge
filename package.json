@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-bridge",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "A local Chrome Native Messaging to MCP bridge for user-approved browser automation.",
   "type": "module",
   "private": true,
@@ -13,10 +13,13 @@
     "uninstall-host": "node scripts/uninstall-host.mjs",
     "build:extension": "node scripts/build-extension-zip.mjs",
     "test": "node --test",
-    "check": "node --check mcp/server.mjs && node --check native-host/host.mjs && node --check extension/service-worker.js && node --check extension/popup.js && node --test"
+    "check": "node --check mcp/server.mjs && node --check mcp/register-local-analysis-tools.mjs && node --check mcp/register-cdp-analysis-tools.mjs && node --check lib/js-analysis.mjs && node --check lib/binary-analysis.mjs && node --check lib/protocol-analysis.mjs && node --check lib/source-map-analysis.mjs && node --check lib/wasm-analysis.mjs && node --check lib/cdp-analysis.mjs && node --check native-host/host.mjs && node --check extension/service-worker.js && node --check extension/popup.js && node --test"
   },
   "dependencies": {
+    "@jridgewell/trace-mapping": "^0.3.31",
     "@modelcontextprotocol/sdk": "1.30.0",
+    "acorn": "^8.15.0",
+    "acorn-walk": "^8.3.4",
     "zod": "3.25.76"
   },
   "license": "MIT",

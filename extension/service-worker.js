@@ -10,9 +10,11 @@ const MAX_NETWORK_POLL_LIMIT = 200;
 const DEFAULT_RAW_MAX_EVENTS = 500;
 const DEFAULT_RAW_MAX_BYTES = 1_000_000;
 const MAX_RAW_EVENTS = 1_000;
-const MAX_RAW_BYTES = 3_000_000;
+const MAX_RAW_BYTES = 64 * 1024 * 1024;
 const MAX_RAW_POLL_LIMIT = 200;
 const MAX_RAW_RESULT_BYTES = 3_000_000;
+const MAX_RAW_EVENT_BYTES = 2_500_000;
+const MAX_RAW_POLL_BYTES = 2_500_000;
 let nativePort = null;
 let reconnectTimer = null;
 let reconnectDelayMs = 1_000;
@@ -1173,7 +1175,14 @@ function requireRawSession(sessionId) {
 function rawPollResult(session, afterCursor, limit) {
   const earliestCursor = session.events[0]?.cursor ?? session.latestCursor + 1;
   const matching = session.events.filter((event) => event.cursor > afterCursor);
-  const selected = matching.slice(0, limit);
+  const selected = [];
+  let selectedBytes = 0;
+  for (const event of matching) {
+    if (selected.length >= limit) break;
+    if (selected.length > 0 && selectedBytes + event.byteLength > MAX_RAW_POLL_BYTES) break;
+    selected.push(event);
+    selectedBytes += event.byteLength;
+  }
   return {
     sessionId: session.id,
     tabId: session.tabId,
@@ -1207,7 +1216,7 @@ function recordRawEvent(session, source, method, params) {
     params,
   };
   stored.byteLength = new TextEncoder().encode(JSON.stringify(stored)).byteLength;
-  if (stored.byteLength > session.maxBytes) {
+  if (stored.byteLength > session.maxBytes || stored.byteLength > MAX_RAW_EVENT_BYTES) {
     session.dropped += 1;
     resolveRawWaiters(session);
     return;
@@ -1287,7 +1296,13 @@ async function attachRawSession(params) {
     state: session.state,
     cursor: 0,
     createdAt: session.createdAt,
-    limits: { maxEvents, maxBytes, maxResultBytes: MAX_RAW_RESULT_BYTES },
+    limits: {
+      maxEvents,
+      maxBytes,
+      maxEventBytes: MAX_RAW_EVENT_BYTES,
+      maxPollBytes: MAX_RAW_POLL_BYTES,
+      maxResultBytes: MAX_RAW_RESULT_BYTES,
+    },
     captureEvents,
   };
 }
