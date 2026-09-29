@@ -118,6 +118,105 @@ Use an absolute path when configuring a standalone MCP client:
 
 The local Agent reads `~/.chrome-agent-bridge/auth.json` automatically. Set `CHROME_AGENT_BRIDGE_TOKEN` only when configuring a separate local process with a token copied from the extension popup.
 
+### URL (Streamable HTTP) transport
+
+`mcp/server.mjs` is the local stdio entry. `mcp/http-server.mjs` exposes the identical tool surface over Streamable HTTP so a client that cannot spawn a local process (another machine, a container, a hosted client) can connect with a URL instead.
+
+Start it with:
+
+```bash
+npm run start:http
+```
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CHROME_AGENT_BRIDGE_MCP_HOST` | `127.0.0.1` | Bind address(es), comma separated; `0.0.0.0` or `::` binds all |
+| `CHROME_AGENT_BRIDGE_MCP_PORT` | `43118` | Bind port |
+| `CHROME_AGENT_BRIDGE_MCP_PATH` | `/mcp` | Endpoint path |
+| `CHROME_AGENT_BRIDGE_MCP_TOKEN` | bridge token (`CHROME_AGENT_BRIDGE_TOKEN`, else `auth.json`) | Expected bearer token |
+
+Every MCP request must send `Authorization: Bearer <token>`; `/health` is the only unauthenticated endpoint. The URL entry is stateless and serves one fresh server per request. Multiple addresses share one port:
+
+```bash
+CHROME_AGENT_BRIDGE_MCP_HOST=127.0.0.1,192.0.2.10 npm run start:http
+```
+
+Call a tool from the shell without an MCP client:
+
+```bash
+export CHROME_AGENT_BRIDGE_MCP_URL=http://127.0.0.1:43118/mcp
+export CHROME_AGENT_BRIDGE_MCP_TOKEN=cab_...
+npm run mcp:call -- browser_status
+npm run mcp:call -- browser_list_tabs
+npm run mcp:call -- tools/list
+```
+
+#### Run as a systemd user service
+
+```bash
+npm run install-mcp-http -- --host 127.0.0.1,192.0.2.10 --port 43118
+```
+
+The installer writes the bearer token to a private `~/.chrome-agent-bridge/mcp-http.env` (mode 0600), generates `~/.config/systemd/user/chrome-agent-bridge-mcp.service` with `Restart=always`, enables it, and turns on linger so it starts at boot. Preview without writing with `--dry-run`. Remove it with `npm run uninstall-mcp-http` (add `--purge` to also delete the env file). The token is never written into this repository.
+
+Client configuration:
+
+```json
+{
+  "mcpServers": {
+    "chrome-agent-bridge": {
+      "transport": "streamable-http",
+      "url": "http://192.0.2.10:43118/mcp",
+      "headers": { "Authorization": "Bearer cab_..." }
+    }
+  }
+}
+```
+
+When binding a non-loopback address, the token is the only access control; restrict the address to a trusted network and rotate the token from the extension popup if it leaks.
+
+### Optional LAN access
+
+The native host binds `127.0.0.1` by default. An operator can additionally bind one or more explicit local addresses so a client on another machine (or a container/host pair) can reach the same authenticated RPC endpoint. The bearer token is still required for every request.
+
+Configure bind addresses with any of these mechanisms:
+
+1. A `network.json` file in the bridge directory (no reinstall required):
+
+```json
+{ "bindHosts": ["127.0.0.1", "192.0.2.10"] }
+```
+
+2. The installer, which bakes the value into the private launcher:
+
+```bash
+npm run install-host -- --bind-hosts 127.0.0.1,192.0.2.10
+```
+
+3. `CHROME_AGENT_BRIDGE_BIND_HOSTS` in the host process environment (highest priority).
+
+Every bind address shares one port. The native host records the reachable set in `runtime.json` as `hosts`, keeping `host` as the loopback address when available. Binding `0.0.0.0` or `::` is expanded to the machine's concrete addresses.
+
+By default the port is ephemeral and changes on every host restart. Set a fixed port so a client on another machine can reach the bridge without copying `runtime.json`:
+
+```json
+{ "bindHosts": ["127.0.0.1", "192.0.2.10"], "port": 42359 }
+```
+
+`CHROME_AGENT_BRIDGE_PORT` overrides the file. `npm run install-host -- --bind-hosts 127.0.0.1,192.0.2.10` bakes only the hosts into the launcher; add the port to `network.json` or the launcher environment.
+
+A client selects a non-loopback address with `CHROME_AGENT_BRIDGE_CONNECT_HOST`. The client trusts an address only when the native host declared it in `runtime.json`; a hand-edited runtime file cannot silently redirect a client, and any address carrying a scheme, path, port, or credentials is rejected.
+
+A client with no `runtime.json` at all can pin the endpoint explicitly. This requires all three values, so nothing is guessed:
+
+```bash
+export CHROME_AGENT_BRIDGE_CONNECT_HOST=192.0.2.10
+export CHROME_AGENT_BRIDGE_PORT=42359
+export CHROME_AGENT_BRIDGE_TOKEN=cab_...   # from the extension popup
+```
+
+Security note: binding a non-loopback address makes the full browser-control RPC reachable on that interface. Raw CDP can read cookies, storage, request and response bodies, and credentials for the attached tab. Restrict the address to a trusted LAN or tunnel, keep the token private, and prefer a firewall or SSH tunnel over a public or untrusted network.
+
 The repository is also a Codex plugin: `.codex-plugin/plugin.json` registers the MCP server and the `chrome-agent-control` skill.
 
 **Standalone MCP clients must install the paired Skill separately.** The Extension ZIP contains only the Chrome extension, and an MCP configuration exposes tools without teaching the Agent the required workflow. Follow [Install Chrome Agent Bridge for an Agent](./docs/agent-installation.md).
@@ -162,9 +261,9 @@ Local analysis does not require Chrome. Raw-backed analysis starts from `browser
 
 - Native Messaging only accepts the extension ID placed in the installed host manifest.
 - The installer generates a private launcher containing absolute Node.js and host paths, so Chrome does not depend on the terminal's `PATH`.
-- The native host listens only on `127.0.0.1` and requires a long-lived random bearer token for every RPC request.
+- The native host binds `127.0.0.1` by default and optionally an explicit operator-configured address list, and requires a long-lived random bearer token for every RPC request. A non-loopback bind is never implicit.
 - The token is stored in `~/.chrome-agent-bridge/auth.json` with user-only permissions. It has no automatic expiry and remains valid until the user selects **Renew** in the extension popup.
-- Runtime connection data is stored separately in `~/.chrome-agent-bridge/runtime.json`; it does not contain the token.
+- Runtime connection data is stored separately in `~/.chrome-agent-bridge/runtime.json`; it does not contain the token. It records the reachable `hosts` list so a client can only target an operator-declared address.
 - Renewing the token atomically replaces the local credential and immediately rejects the previous token.
 - Password inputs are rejected by `browser_fill`; Raw CDP commands are not restricted by that check.
 - Browser-internal URLs cannot be inspected or scripted.

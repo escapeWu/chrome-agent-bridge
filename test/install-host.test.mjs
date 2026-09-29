@@ -27,3 +27,41 @@ test("host installer dry-run emits a valid native host manifest", async () => {
   assert.ok(path.isAbsolute(result.hostModulePath));
   assert.match(result.manifest.path, /native-host-launcher$/);
 });
+
+test("host installer dry-run accepts bind hosts and a fixed port", async () => {
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [
+      path.join(root, "scripts", "install-host.mjs"),
+      "--dry-run",
+      "--bind-hosts",
+      "127.0.0.1,192.0.2.10",
+      "--port",
+      "43117",
+    ],
+  );
+  const result = JSON.parse(stdout);
+  assert.equal(result.bindHosts, "127.0.0.1,192.0.2.10");
+  assert.equal(result.port, "43117");
+});
+
+test("host installer rejects an invalid bind host or port", async () => {
+  await assert.rejects(
+    () =>
+      execFileAsync(process.execPath, [
+        path.join(root, "scripts", "install-host.mjs"),
+        "--dry-run",
+        "--bind-hosts",
+        "http://evil",
+      ]),
+  );
+  await assert.rejects(
+    () =>
+      execFileAsync(process.execPath, [
+        path.join(root, "scripts", "install-host.mjs"),
+        "--dry-run",
+        "--port",
+        "70000",
+      ]),
+  );
+});

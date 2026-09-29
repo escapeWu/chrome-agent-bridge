@@ -8,7 +8,16 @@ import {
   renewAuthState,
   writePrivateJsonAtomic,
 } from "../lib/auth-token.mjs";
-import { bridgeDirectory, DEFAULT_TIMEOUT_MS, runtimeFile } from "../lib/config.mjs";
+import {
+  bridgeBindHosts,
+  bridgeBindPort,
+  bridgeDirectory,
+  DEFAULT_TIMEOUT_MS,
+  isLoopbackHost,
+  isWildcardHost,
+  localAddresses,
+  runtimeFile,
+} from "../lib/config.mjs";
 import { encodeNativeMessage, NativeMessageDecoder } from "../lib/native-messaging.mjs";
 
 let authState = await loadOrCreateAuthState();
@@ -251,7 +260,7 @@ process.stdin.on("data", (chunk) => {
   }
 });
 
-const server = http.createServer(async (request, response) => {
+async function handleRequest(request, response) {
   response.setHeader("content-type", "application/json; charset=utf-8");
 
   if (request.method !== "POST" || request.url !== "/rpc") {
@@ -297,24 +306,92 @@ const server = http.createServer(async (request, response) => {
       response.end(JSON.stringify({ ok: false, error: serializeError(error) }));
     }
   });
-});
+}
 
-server.listen(0, "127.0.0.1", async () => {
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Cannot resolve bridge address");
+const servers = [];
+
+function listenOn(server, port, host) {
+  return new Promise((resolve, reject) => {
+    const onError = (error) => {
+      server.removeListener("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.removeListener("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, host);
+  });
+}
+
+async function startBridgeServers() {
+  const requested = await bridgeBindHosts();
+  const wildcard = requested.find(isWildcardHost) ?? null;
+  const explicit = requested.filter((host) => !isWildcardHost(host));
+
+  // A wildcard bind already covers every interface, so it is never combined with
+  // per-address sockets (which would collide with EADDRINUSE).
+  const bindHosts = wildcard ? [wildcard] : explicit.length > 0 ? explicit : ["127.0.0.1"];
+
+  // The first address that binds successfully fixes the shared port; the rest
+  // reuse it so every reachable address serves the same RPC endpoint.
+  const initialPort = await bridgeBindPort();
+  let port = null;
+  const boundHosts = [];
+  for (const host of bindHosts) {
+    const server = http.createServer(handleRequest);
+    try {
+      await listenOn(server, port ?? initialPort, host);
+    } catch (error) {
+      log(`Could not bind ${host}:${port ?? initialPort}: ${error.message}`);
+      server.close();
+      continue;
+    }
+    servers.push(server);
+    boundHosts.push(host);
+    if (port == null) port = server.address().port;
+  }
+  if (port == null) throw new Error("Could not bind any Chrome Agent Bridge address");
+
+  // Wildcard binds are advertised as the concrete addresses a client can use.
+  const advertised = wildcard
+    ? ["127.0.0.1", ...localAddresses().map((record) => record.address)]
+    : boundHosts;
+  const hosts = [...new Set(advertised.filter((host) => !isWildcardHost(host)))];
+  const host = hosts.includes("127.0.0.1") ? "127.0.0.1" : hosts[0];
+
+  for (const address of hosts) {
+    if (!isLoopbackHost(address)) {
+      log(`WARNING: bridge RPC is reachable at ${address}:${port}; the bearer token is still required.`);
+    }
+  }
 
   const directory = bridgeDirectory();
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   runtimeIdentity = {
     schemaVersion: 2,
-      host: "127.0.0.1",
-      port: address.port,
-      pid: process.pid,
-      startedAt: new Date().toISOString(),
+    host,
+    port,
+    hosts,
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
   };
   await writePrivateJsonAtomic(runtimeFile(), runtimeIdentity);
   sendNative({ type: "ready", ok: true, version: "0.8.0" });
-});
+}
+
+try {
+  await startBridgeServers();
+} catch (error) {
+  log(`Failed to start bridge servers: ${error.message}`);
+  process.exitCode = 1;
+  await cleanup();
+  // Exit instead of hanging connected-but-dead so the extension can reconnect a
+  // fresh host rather than waiting forever on an unreachable RPC endpoint.
+  process.exit(1);
+}
 
 async function cleanup() {
   if (cleanedUp) return;
@@ -329,7 +406,7 @@ async function cleanup() {
     waiter.resolve(eventResult(waiter.afterSequence, waiter.tabId));
   }
   eventWaiters.clear();
-  server.close();
+  for (const server of servers) server.close();
   try {
     const current = JSON.parse(await fs.readFile(runtimeFile(), "utf8"));
     if (current?.pid === runtimeIdentity?.pid && current?.port === runtimeIdentity?.port) {

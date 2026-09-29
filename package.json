@@ -9,11 +9,15 @@
   },
   "scripts": {
     "start": "node mcp/server.mjs",
+    "start:http": "node mcp/http-server.mjs",
+    "mcp:call": "node scripts/mcp-http-call.mjs",
     "install-host": "node scripts/install-host.mjs",
+    "install-mcp-http": "node scripts/install-mcp-http-service.mjs",
+    "uninstall-mcp-http": "node scripts/uninstall-mcp-http-service.mjs",
     "uninstall-host": "node scripts/uninstall-host.mjs",
     "build:extension": "node scripts/build-extension-zip.mjs",
     "test": "node --test",
-    "check": "node --check mcp/server.mjs && node --check mcp/register-local-analysis-tools.mjs && node --check mcp/register-cdp-analysis-tools.mjs && node --check lib/js-analysis.mjs && node --check lib/binary-analysis.mjs && node --check lib/protocol-analysis.mjs && node --check lib/source-map-analysis.mjs && node --check lib/wasm-analysis.mjs && node --check lib/cdp-analysis.mjs && node --check native-host/host.mjs && node --check extension/service-worker.js && node --check extension/popup.js && node --test"
+    "check": "node --check mcp/server.mjs && node --check mcp/http-server.mjs && node --check mcp/create-server.mjs && node --check scripts/install-mcp-http-service.mjs && node --check scripts/uninstall-mcp-http-service.mjs && node --check scripts/mcp-http-call.mjs && node --check mcp/register-local-analysis-tools.mjs && node --check mcp/register-cdp-analysis-tools.mjs && node --check lib/js-analysis.mjs && node --check lib/binary-analysis.mjs && node --check lib/protocol-analysis.mjs && node --check lib/source-map-analysis.mjs && node --check lib/wasm-analysis.mjs && node --check lib/cdp-analysis.mjs && node --check native-host/host.mjs && node --check extension/service-worker.js && node --check extension/popup.js && node --test"
   },
   "dependencies": {
     "@jridgewell/trace-mapping": "^0.3.31",
