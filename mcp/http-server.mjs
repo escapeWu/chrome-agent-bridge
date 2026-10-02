@@ -11,8 +11,13 @@
  *                                  (default 127.0.0.1; `0.0.0.0` or `::` binds all)
  *   CHROME_AGENT_BRIDGE_MCP_PORT   bind port           (default 43118)
  *   CHROME_AGENT_BRIDGE_MCP_PATH   endpoint path       (default /mcp)
- *   CHROME_AGENT_BRIDGE_MCP_TOKEN  expected bearer token
- *                                  (default: CHROME_AGENT_BRIDGE_TOKEN, else auth.json)
+ *   CHROME_AGENT_BRIDGE_MCP_TOKEN  optional fixed bearer token override
+ *
+ * Token: by default there is ONE token, the bridge token in auth.json (shown in
+ * the extension popup). It is read on every request, so Renew in the popup takes
+ * effect immediately for MCP clients and for the internal call to the native host.
+ * Setting CHROME_AGENT_BRIDGE_MCP_TOKEN pins a separate client-facing token that
+ * does not follow Renew.
  */
 import crypto, { webcrypto } from "node:crypto";
 import http from "node:http";
@@ -67,10 +72,14 @@ function resolvePath() {
   return value.startsWith("/") ? value : `/${value}`;
 }
 
-async function resolveToken() {
+function explicitToken() {
   const explicit = process.env.CHROME_AGENT_BRIDGE_MCP_TOKEN;
-  if (explicit != null && explicit.trim() !== "") return explicit.trim();
-  return readAuthToken();
+  return explicit != null && explicit.trim() !== "" ? explicit.trim() : null;
+}
+
+/** The token a client must present right now. */
+async function currentToken() {
+  return explicitToken() ?? readAuthToken();
 }
 
 function isAuthorized(header, expectedToken) {
@@ -124,7 +133,8 @@ function sendJson(response, statusCode, payload) {
 const hosts = resolveHosts();
 const port = resolvePort();
 const endpointPath = resolvePath();
-const token = await resolveToken();
+// Fail at startup (and create auth.json on first run) rather than on a request.
+await currentToken();
 
 async function handleMcp(request, response) {
   // Stateless Streamable HTTP: one transport + server per request. The browser
@@ -165,6 +175,14 @@ async function requestHandler(request, response) {
     return;
   }
 
+  let token;
+  try {
+    token = await currentToken();
+  } catch (error) {
+    log(`Cannot read the bridge token: ${error.message}`);
+    sendJson(response, 503, { error: { code: "auth_unavailable", message: "Authentication is unavailable" } });
+    return;
+  }
   if (!isAuthorized(request.headers.authorization, token)) {
     response.setHeader("www-authenticate", 'Bearer realm="chrome-agent-bridge-mcp"');
     sendJson(response, 401, { error: { code: "unauthorized", message: "Unauthorized" } });
@@ -180,6 +198,12 @@ async function requestHandler(request, response) {
   response.setHeader("allow", "POST");
   sendJson(response, 405, { error: { code: "method_not_allowed", message: "Use POST" } });
 }
+
+log(
+  explicitToken()
+    ? "Token: CHROME_AGENT_BRIDGE_MCP_TOKEN override (does not follow Renew)"
+    : "Token: auth.json, read per request (follows Renew in the extension popup)",
+);
 
 const servers = [];
 await Promise.all(

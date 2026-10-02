@@ -116,3 +116,51 @@ test("URL MCP exposes the same tools behind a bearer token", async (context) => 
   const notFound = await fetch(`${url}/nope`);
   assert.equal(notFound.status, 404);
 });
+
+async function startHttp(context, extraEnv) {
+  const port = await freePort();
+  const env = { ...process.env, CHROME_AGENT_BRIDGE_MCP_HOST: "127.0.0.1", CHROME_AGENT_BRIDGE_MCP_PORT: String(port), ...extraEnv };
+  for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
+  const child = spawn(process.execPath, [path.join(root, "mcp", "http-server.mjs")], { cwd: root, env, stdio: ["ignore", "ignore", "pipe"] });
+  context.after(() => child.kill("SIGTERM"));
+  const url = `http://127.0.0.1:${port}`;
+  await waitForHealth(url);
+  return url;
+}
+
+const listTools = (url, token) => rpc(url, token, { jsonrpc: "2.0", id: 1, method: "tools/list" });
+
+test("without an MCP token override, Renew in auth.json takes effect immediately", async (context) => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const { loadOrCreateAuthState, renewAuthState } = await import("../lib/auth-token.mjs");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-agent-http-token-"));
+  context.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const env = { ...process.env, CHROME_AGENT_BRIDGE_DIR: dir };
+  delete env.CHROME_AGENT_BRIDGE_MCP_TOKEN;
+  delete env.CHROME_AGENT_BRIDGE_TOKEN;
+
+  const { token: original } = await loadOrCreateAuthState(env);
+  const url = await startHttp(context, { CHROME_AGENT_BRIDGE_DIR: dir, CHROME_AGENT_BRIDGE_MCP_TOKEN: undefined, CHROME_AGENT_BRIDGE_TOKEN: undefined });
+  assert.equal((await listTools(url, original)).status, 200);
+
+  const { token: renewed } = await renewAuthState(env);
+  assert.notEqual(renewed, original);
+  // No restart: the very next request sees the renewed token.
+  assert.equal((await listTools(url, renewed)).status, 200);
+  assert.equal((await listTools(url, original)).status, 401);
+});
+
+test("an explicit MCP token override stays fixed across Renew", async (context) => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const { loadOrCreateAuthState, renewAuthState } = await import("../lib/auth-token.mjs");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-agent-http-pinned-"));
+  context.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const env = { ...process.env, CHROME_AGENT_BRIDGE_DIR: dir };
+  await loadOrCreateAuthState(env);
+
+  const url = await startHttp(context, { CHROME_AGENT_BRIDGE_DIR: dir, CHROME_AGENT_BRIDGE_MCP_TOKEN: TOKEN });
+  await renewAuthState(env);
+  assert.equal((await listTools(url, TOKEN)).status, 200);
+});

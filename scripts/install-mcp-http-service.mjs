@@ -2,9 +2,11 @@
 /**
  * Install the URL (Streamable HTTP) MCP as a systemd *user* service.
  *
- * The bearer token is written to a private env file
- * (`~/.chrome-agent-bridge/mcp-http.env`, mode 0600) that is never part of the
- * repository, so no secret is ever committed.
+ * The service authenticates clients with the bridge token in auth.json, read on
+ * every request, so Renew in the extension popup updates it everywhere and no
+ * copy of the token is stored. Pass --token only to pin a separate, fixed
+ * client-facing token; it is then written to a private env file
+ * (`~/.chrome-agent-bridge/mcp-http.env`, mode 0600) that is never committed.
  *
  * Usage:
  *   npm run install-mcp-http -- --host 127.0.0.1,192.0.2.10 --port 43118
@@ -18,7 +20,6 @@ import process from "node:process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { bridgeDirectory, isValidHost, parseHostList } from "../lib/config.mjs";
-import { readAuthToken } from "../lib/auth-token.mjs";
 
 const execFileAsync = promisify(execFile);
 const SERVICE_NAME = "chrome-agent-bridge-mcp";
@@ -76,7 +77,9 @@ function renderEnvFile({ host, port, endpointPath, token }) {
     `CHROME_AGENT_BRIDGE_MCP_HOST=${host}`,
     `CHROME_AGENT_BRIDGE_MCP_PORT=${port}`,
     `CHROME_AGENT_BRIDGE_MCP_PATH=${endpointPath}`,
-    `CHROME_AGENT_BRIDGE_MCP_TOKEN=${token}`,
+    ...(token
+      ? [`CHROME_AGENT_BRIDGE_MCP_TOKEN=${token}`]
+      : ["# No token here: clients use the bridge token in auth.json (extension popup)."]),
     "",
   ].join("\n");
 }
@@ -111,7 +114,7 @@ const serverPath = path.join(repoRoot, "mcp", "http-server.mjs");
 const nodePath = process.execPath;
 const { envFile, unitDir, unitFile } = servicePaths();
 
-const token = args.token ?? (await readAuthToken());
+const token = args.token ?? null;
 const envContent = renderEnvFile({
   host: args.host ?? "127.0.0.1",
   port: args.port ?? "43118",

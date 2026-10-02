@@ -133,9 +133,11 @@ npm run start:http
 | `CHROME_AGENT_BRIDGE_MCP_HOST` | `127.0.0.1` | Bind address(es), comma separated; `0.0.0.0` or `::` binds all |
 | `CHROME_AGENT_BRIDGE_MCP_PORT` | `43118` | Bind port |
 | `CHROME_AGENT_BRIDGE_MCP_PATH` | `/mcp` | Endpoint path |
-| `CHROME_AGENT_BRIDGE_MCP_TOKEN` | bridge token (`CHROME_AGENT_BRIDGE_TOKEN`, else `auth.json`) | Expected bearer token |
+| `CHROME_AGENT_BRIDGE_MCP_TOKEN` | unset | Optional fixed token that replaces the shared one (see below) |
 
-Every MCP request must send `Authorization: Bearer <token>`; `/health` is the only unauthenticated endpoint. The URL entry is stateless and serves one fresh server per request. Multiple addresses share one port:
+Every MCP request must send `Authorization: Bearer <token>`; `/health` is the only unauthenticated endpoint.
+
+**One token.** By default the URL entry accepts exactly the bridge token shown in the extension popup (`auth.json`), and uses the same one for its own call to the native host. It reads the file on every request, so **Renew** in the popup takes effect at once for MCP clients and the internal leg alike, with no restart and no second copy to keep in sync. Clients holding the previous token get `401` and must be given the new one. Setting `CHROME_AGENT_BRIDGE_MCP_TOKEN` pins a separate client-facing token instead; it does not follow Renew. The URL entry is stateless and serves one fresh server per request. Multiple addresses share one port:
 
 ```bash
 CHROME_AGENT_BRIDGE_MCP_HOST=127.0.0.1,192.0.2.10 npm run start:http
@@ -157,7 +159,7 @@ npm run mcp:call -- tools/list
 npm run install-mcp-http -- --host 127.0.0.1,192.0.2.10 --port 43118
 ```
 
-The installer writes the bearer token to a private `~/.chrome-agent-bridge/mcp-http.env` (mode 0600), generates `~/.config/systemd/user/chrome-agent-bridge-mcp.service` with `Restart=always`, enables it, and turns on linger so it starts at boot. Preview without writing with `--dry-run`. Remove it with `npm run uninstall-mcp-http` (add `--purge` to also delete the env file). The token is never written into this repository.
+The installer writes the listen address to a private `~/.chrome-agent-bridge/mcp-http.env` (mode 0600) and, unlike earlier versions, no token (pass `--token` only to pin a separate one), generates `~/.config/systemd/user/chrome-agent-bridge-mcp.service` with `Restart=always`, enables it, and turns on linger so it starts at boot. Preview without writing with `--dry-run`. Remove it with `npm run uninstall-mcp-http` (add `--purge` to also delete the env file). The token is never written into this repository.
 
 Client configuration:
 
