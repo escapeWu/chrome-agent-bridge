@@ -56,6 +56,7 @@ test("MCP server exposes the browser and analysis tool surface", async (context)
       "browser_click",
       "browser_close_tab",
       "browser_fill",
+      "browser_list_instances",
       "browser_list_tabs",
       "browser_navigate",
       "browser_network_poll",

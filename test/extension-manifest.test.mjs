@@ -23,6 +23,7 @@ test("extension manifest requests only the documented capability set", async () 
     "debugger",
     "nativeMessaging",
     "scripting",
+    "storage",
     "tabs",
   ]);
   assert.equal(manifest.permissions.includes("cookies"), false);

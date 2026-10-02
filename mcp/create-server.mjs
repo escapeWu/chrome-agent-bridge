@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { BridgeOfflineError, callBridge } from "../lib/bridge-client.mjs";
+import { BridgeOfflineError, callBridge, callInstance, listBrowserInstances } from "../lib/bridge-client.mjs";
 import { clearCdpAnalysisSession, registerCdpAnalysisTools } from "./register-cdp-analysis-tools.mjs";
 import { registerLocalAnalysisTools } from "./register-local-analysis-tools.mjs";
 
@@ -10,6 +10,33 @@ import { registerLocalAnalysisTools } from "./register-local-analysis-tools.mjs"
  * The stdio entry (`server.mjs`) and the URL entry (`http-server.mjs`) share this
  * factory so both transports expose exactly the same tool surface.
  */
+/** Tools that address a browser directly rather than through a prefixed session ID. */
+const BROWSER_BOUND_TOOLS = new Set([
+  "browser_status",
+  "browser_list_tabs",
+  "browser_open_tab",
+  "browser_activate_tab",
+  "browser_close_tab",
+  "browser_navigate",
+  "browser_snapshot",
+  "browser_screenshot",
+  "browser_act",
+  "browser_click",
+  "browser_fill",
+  "browser_watch_events",
+  "browser_network_start",
+  "browser_cdp_attach",
+]);
+
+const browserSelector = z
+  .string()
+  .min(1)
+  .max(100)
+  .optional()
+  .describe(
+    "Which connected Chrome to use: an instanceId or label from browser_list_instances. Required when more than one browser is connected; session-based tools infer it from their sessionId.",
+  );
+
 export function createBridgeServer() {
   const server = new McpServer({
     name: "chrome-agent-bridge",
@@ -34,8 +61,11 @@ export function createBridgeServer() {
             error: {
               code,
               message: error instanceof Error ? error.message : String(error),
+              ...(Array.isArray(error?.instances) ? { instances: error.instances } : {}),
               recovery:
-                code === "bridge_offline"
+                code === "browser_ambiguous" || code === "browser_not_found"
+                  ? "Call browser_list_instances, then retry with the browser parameter set to an instanceId or label."
+                  : code === "bridge_offline"
                   ? "Ensure the unpacked extension and native host are installed, reload the extension, then retry."
                   : code === "unauthorized"
                     ? "Reload the local token or renew it from the extension popup, then retry."
@@ -48,7 +78,10 @@ export function createBridgeServer() {
   }
 
   function tool(name, config, handler) {
-    server.registerTool(name, config, async (input) => {
+    const registered = BROWSER_BOUND_TOOLS.has(name)
+      ? { ...config, inputSchema: { ...config.inputSchema, browser: browserSelector } }
+      : config;
+    server.registerTool(name, registered, async (input) => {
       try {
         return await handler(input);
       } catch (error) {
@@ -64,7 +97,45 @@ export function createBridgeServer() {
       description: "Check whether the Chrome extension and native host are connected.",
       inputSchema: {},
     },
-    async () => asText(await callBridge("browser.status")),
+    async (input) => {
+      const route = {};
+      const status = await callBridge("browser.status", input, { route });
+      return asText({ ...status, ...(route.instanceId ? { browser: route } : {}) });
+    },
+  );
+
+  tool(
+    "browser_list_instances",
+    {
+      title: "List connected browsers",
+      description:
+        "List every Chrome (profile or user-data-dir) connected to this machine's bridge, with its instanceId, label, reachability, and tab count. Call this first when more than one browser may be connected, then pass instanceId or label as `browser` to browser tools.",
+      inputSchema: {},
+    },
+    async () => {
+      const instances = await listBrowserInstances();
+      const rows = await Promise.all(
+        instances.map(async (instance) => {
+          const base = {
+            instanceId: instance.instanceId,
+            label: instance.label,
+            pid: instance.pid,
+            startedAt: instance.startedAt,
+            ...(instance.legacy ? { legacy: true } : {}),
+          };
+          try {
+            const [status, tabs] = await Promise.all([
+              callInstance(instance, "browser.status", {}, { timeoutMs: 3_000 }),
+              callInstance(instance, "tabs.list", {}, { timeoutMs: 3_000 }),
+            ]);
+            return { ...base, reachable: true, extensionVersion: status.extensionVersion, tabCount: tabs.length };
+          } catch (error) {
+            return { ...base, reachable: false, error: { code: error?.code || "bridge_error", message: error.message } };
+          }
+        }),
+      );
+      return asText({ instances: rows });
+    },
   );
 
   tool(
@@ -74,7 +145,11 @@ export function createBridgeServer() {
       description: "List current scriptable Chrome tabs. Use before selecting a tab ID.",
       inputSchema: {},
     },
-    async () => asText({ tabs: await callBridge("tabs.list") }),
+    async (input) => {
+      const route = {};
+      const tabs = await callBridge("tabs.list", input, { route });
+      return asText({ ...(route.instanceId ? { browser: route } : {}), tabs });
+    },
   );
 
   tool(

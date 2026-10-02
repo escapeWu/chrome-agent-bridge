@@ -15,7 +15,11 @@ const MAX_RAW_POLL_LIMIT = 200;
 const MAX_RAW_RESULT_BYTES = 3_000_000;
 const MAX_RAW_EVENT_BYTES = 2_500_000;
 const MAX_RAW_POLL_BYTES = 2_500_000;
+const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
+const MAX_LABEL_LENGTH = 64;
 let nativePort = null;
+let instance = null;
+let instanceLoad = null;
 let reconnectTimer = null;
 let reconnectDelayMs = 1_000;
 let nextAuthRequestId = 1;
@@ -50,6 +54,60 @@ function rejectPendingAuthRequests(message) {
   pendingAuthRequests.clear();
 }
 
+function newInstanceId() {
+  return `inst_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+}
+
+function defaultLabel(instanceId) {
+  return `Chrome-${instanceId.replace(/^inst_/, "").slice(-4)}`;
+}
+
+function cleanLabel(value, instanceId) {
+  const cleaned = typeof value === "string"
+    ? value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, MAX_LABEL_LENGTH)
+    : "";
+  return cleaned || defaultLabel(instanceId);
+}
+
+// Identifies this browser profile to the local bridge. chrome.storage.local is
+// per profile and never synced, so each profile keeps its own stable identity.
+function loadInstance({ regenerate = false } = {}) {
+  if (!regenerate && instance) return Promise.resolve(instance);
+  if (!regenerate && instanceLoad) return instanceLoad;
+  instanceLoad = (async () => {
+    const stored = await chrome.storage.local.get(["instanceId", "instanceLabel"]);
+    const reuse = !regenerate && INSTANCE_ID_PATTERN.test(stored.instanceId || "");
+    const instanceId = reuse ? stored.instanceId : newInstanceId();
+    const label = reuse ? cleanLabel(stored.instanceLabel, instanceId) : defaultLabel(instanceId);
+    await chrome.storage.local.set({ instanceId, instanceLabel: label });
+    instance = { instanceId, label };
+    return instance;
+  })().finally(() => {
+    instanceLoad = null;
+  });
+  return instanceLoad;
+}
+
+async function renameInstance(value) {
+  const current = await loadInstance();
+  const label = cleanLabel(value, current.instanceId);
+  await chrome.storage.local.set({ instanceLabel: label });
+  instance = { ...current, label };
+  nativePort?.postMessage({ type: "instance.update", label });
+  return instance;
+}
+
+async function sendHello(port, { regenerate = false } = {}) {
+  const identity = await loadInstance({ regenerate });
+  if (nativePort !== port) return;
+  port.postMessage({
+    type: "hello",
+    extensionVersion: chrome.runtime.getManifest().version,
+    instanceId: identity.instanceId,
+    label: identity.label,
+  });
+}
+
 function connect() {
   if (nativePort) return;
   try {
@@ -62,7 +120,7 @@ function connect() {
       rejectPendingAuthRequests("Native host disconnected");
       scheduleReconnect();
     });
-    port.postMessage({ type: "hello", extensionVersion: chrome.runtime.getManifest().version });
+    void sendHello(port).catch(() => {});
   } catch {
     nativePort = null;
     scheduleReconnect();
@@ -79,6 +137,12 @@ function scheduleReconnect() {
 }
 
 async function handleNativeMessage(message, port) {
+  if (message?.type === "instance.conflict") {
+    // Another live browser already registered this ID (for example a copied
+    // profile directory). Take a fresh identity and register again.
+    await sendHello(port, { regenerate: true }).catch(() => {});
+    return;
+  }
   if (message?.type === "auth.response" && typeof message.id === "string") {
     const request = pendingAuthRequests.get(message.id);
     if (!request) return;
@@ -1447,7 +1511,11 @@ function handleRawDebuggerDetach(source) {
 async function dispatch(method, params) {
   switch (method) {
     case "browser.status":
-      return { connected: true, extensionVersion: chrome.runtime.getManifest().version };
+      return {
+        connected: true,
+        extensionVersion: chrome.runtime.getManifest().version,
+        ...(await loadInstance()),
+      };
     case "tabs.list": {
       const tabs = await chrome.tabs.query({});
       return tabs
@@ -1513,6 +1581,16 @@ chrome.runtime.onStartup.addListener(connect);
 chrome.action.onClicked.addListener(connect);
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return false;
+  if (message?.type === "instance.get" || message?.type === "instance.rename") {
+    const pendingInstance = message.type === "instance.get"
+      ? loadInstance()
+      : renameInstance(message.label);
+    void pendingInstance.then(
+      (result) => sendResponse({ ok: true, result }),
+      (error) => sendResponse({ ok: false, error: errorPayload(error, "instance_error") }),
+    );
+    return true;
+  }
   const action = message?.type === "auth.get"
     ? "get"
     : message?.type === "auth.renew"

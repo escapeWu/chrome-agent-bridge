@@ -99,11 +99,12 @@ After installing or updating a Skill, start a new Agent task or reload the clien
 
 The Agent should call:
 
-1. `browser_status` and require `connected: true`.
-2. `browser_list_tabs` and ask the user which existing tab is in scope when that is not already explicit.
-3. `browser_snapshot` before the first high-level page action.
-4. `browser_act` once with a ref from that snapshot, then take a new snapshot to verify. Never reuse a ref after an action or navigation.
-5. Confirm that a local tool such as `understand_code` appears in the MCP tool catalog. It does not need a browser connection and verifies the 0.8 analysis surface is loaded.
+1. `browser_list_instances`. With one browser, omit `browser` from later calls; with several, pass the `instanceId` or label as `browser`.
+2. `browser_status` and require `connected: true`.
+3. `browser_list_tabs` and ask the user which existing tab is in scope when that is not already explicit.
+4. `browser_snapshot` before the first high-level page action.
+5. `browser_act` once with a ref from that snapshot, then take a new snapshot to verify. Never reuse a ref after an action or navigation.
+6. Confirm that a local tool such as `understand_code` appears in the MCP tool catalog. It does not need a browser connection and verifies the 0.8 analysis surface is loaded.
 
 Do not guess a tab ID or inspect unrelated tabs.
 
