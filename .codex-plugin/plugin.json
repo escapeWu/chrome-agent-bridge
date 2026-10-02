@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-bridge",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Control and analyze user-approved Chrome tabs through a local MCP bridge, with local code, protocol, and WASM analysis.",
   "author": {
     "name": "梧桐",
