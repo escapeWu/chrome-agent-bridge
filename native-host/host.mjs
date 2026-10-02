@@ -28,6 +28,7 @@ import {
   writeInstanceRecord,
 } from "../lib/instance-registry.mjs";
 import { encodeNativeMessage, NativeMessageDecoder } from "../lib/native-messaging.mjs";
+import { VERSION } from "../lib/version.mjs";
 
 let authState = await loadOrCreateAuthState();
 const pending = new Map();
@@ -296,7 +297,7 @@ function handleExtensionMessage(message) {
     const label = typeof message.label === "string" && message.label.trim()
       ? message.label
       : isValidInstanceId(message.instanceId) ? undefined : `Chrome (pid ${process.pid})`;
-    sendNative({ type: "hello", ok: true, host: "chrome-agent-bridge", version: "0.8.0", instanceId });
+    sendNative({ type: "hello", ok: true, host: "chrome-agent-bridge", version: VERSION, instanceId });
     queueRegistration({ instanceId, label });
     return;
   }
@@ -459,7 +460,7 @@ async function startBridgeServers() {
   };
   await writePrivateJsonAtomic(runtimeFile(), runtimeIdentity);
   markRuntimeReady();
-  sendNative({ type: "ready", ok: true, version: "0.8.0" });
+  sendNative({ type: "ready", ok: true, version: VERSION });
 }
 
 try {

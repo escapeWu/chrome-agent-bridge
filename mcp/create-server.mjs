@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { VERSION } from "../lib/version.mjs";
 import { BridgeOfflineError, callBridge, callInstance, listBrowserInstances } from "../lib/bridge-client.mjs";
 import { clearCdpAnalysisSession, registerCdpAnalysisTools } from "./register-cdp-analysis-tools.mjs";
 import { registerLocalAnalysisTools } from "./register-local-analysis-tools.mjs";
@@ -40,7 +41,7 @@ const browserSelector = z
 export function createBridgeServer() {
   const server = new McpServer({
     name: "chrome-agent-bridge",
-    version: "0.8.0",
+    version: VERSION,
   });
 
   function asText(value) {

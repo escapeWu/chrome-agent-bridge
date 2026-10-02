@@ -317,7 +317,16 @@ npm run build:extension
 
 Validate the Codex plugin and Skill with the corresponding Codex creator validators before publishing changes.
 
-Pushing a matching `vX.Y.Z` tag runs the release workflow, validates package, plugin, and extension versions, and attaches the allowlisted Extension ZIP to a GitHub Release.
+### Releasing
+
+Releases are built and published by GitHub Actions; nothing is built locally.
+
+1. Open **Actions → Release extension ZIP → Run workflow**, keep branch `main`, and set `bump` to `patch`, `minor`, `major`, or an explicit `X.Y.Z`.
+2. The run tests the code, updates the version in `package.json`, `package-lock.json`, `extension/manifest.json`, and `.codex-plugin/plugin.json`, commits `Release vX.Y.Z` to `main`, tags it, builds the allowlisted Extension ZIP, and attaches it with `SHA256SUMS.txt` to a new GitHub Release.
+
+Source code reads its version from `package.json` (`lib/version.mjs`), so those four files are the only places a version lives. Locally, `node scripts/bump-version.mjs <patch|minor|major|X.Y.Z>` makes the same edits. Pushing a `vX.Y.Z` tag whose versions already match, or running the workflow with `tag` set to an existing tag, also publishes that tag.
+
+The bump run pushes straight to `main`; if branch protection later requires pull requests, allow `github-actions[bot]` to bypass it or the push step will fail.
 
 ## Uninstall the native host
 
