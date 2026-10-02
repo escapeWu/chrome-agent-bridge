@@ -13,9 +13,9 @@ function formatTimestamp(value) {
   return Number.isNaN(date.valueOf()) ? "Unknown" : date.toLocaleString();
 }
 
-function send(type) {
+function send(type, payload = {}) {
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type }, (response) => {
+    chrome.runtime.sendMessage({ type, ...payload }, (response) => {
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
         return;
@@ -37,6 +37,10 @@ export function startPopup(doc = document, clipboard = navigator.clipboard) {
   const toggle = doc.querySelector("#toggle");
   const copy = doc.querySelector("#copy");
   const renew = doc.querySelector("#renew");
+
+  const instanceId = doc.querySelector("#instance-id");
+  const label = doc.querySelector("#label");
+  const saveLabel = doc.querySelector("#save-label");
 
   let token = null;
   let revealed = false;
@@ -115,6 +119,26 @@ export function startPopup(doc = document, clipboard = navigator.clipboard) {
     }
   });
 
+  function setInstance(result) {
+    instanceId.textContent = result.instanceId;
+    label.value = result.label;
+    label.disabled = false;
+    saveLabel.disabled = false;
+  }
+
+  saveLabel.addEventListener("click", async () => {
+    saveLabel.disabled = true;
+    try {
+      setInstance(await send("instance.rename", { label: label.value }));
+      notice.textContent = "Browser name saved.";
+    } catch (error) {
+      notice.textContent = error instanceof Error ? error.message : "Could not save the browser name";
+    } finally {
+      saveLabel.disabled = false;
+    }
+  });
+
+  void send("instance.get").then(setInstance, () => {});
   void send("auth.get").then(setConnected, setError);
 }
 

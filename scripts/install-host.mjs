@@ -7,12 +7,17 @@ import { fileURLToPath } from "node:url";
 import { bridgeDirectory, EXTENSION_ID, HOST_NAME, isValidHost, parseHostList } from "../lib/config.mjs";
 
 function parseArgs(argv) {
-  const result = { dryRun: false, extensionId: EXTENSION_ID, bindHosts: null, port: null };
+  const result = { dryRun: false, extensionId: EXTENSION_ID, bindHosts: null, port: null, userDataDirs: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--extension-id") result.extensionId = argv[++index];
     else if (arg === "--bind-hosts") result.bindHosts = argv[++index];
     else if (arg === "--port") result.port = argv[++index];
+    else if (arg === "--user-data-dir") {
+      const dir = argv[++index];
+      if (!dir || dir.startsWith("--")) throw new Error("Pass a directory with --user-data-dir");
+      result.userDataDirs.push(path.resolve(dir));
+    }
     else if (arg === "--dry-run") result.dryRun = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
@@ -60,6 +65,9 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const hostModulePath = path.join(projectRoot, "native-host", "host.mjs");
 const hostPath = path.join(bridgeDirectory(), "native-host-launcher");
 const target = manifestPath();
+// Chrome launched with --user-data-dir looks for native hosts inside that
+// directory instead of the default profile location.
+const extraTargets = args.userDataDirs.map((dir) => path.join(dir, "NativeMessagingHosts", `${HOST_NAME}.json`));
 const manifest = {
   name: HOST_NAME,
   description: "Chrome Agent Bridge native messaging host",
@@ -70,7 +78,7 @@ const manifest = {
 
 if (args.dryRun) {
   process.stdout.write(
-    `${JSON.stringify({ target, manifest, nodePath: process.execPath, hostModulePath, bindHosts: args.bindHosts, port: args.port }, null, 2)}\n`,
+    `${JSON.stringify({ target, extraTargets, manifest, nodePath: process.execPath, hostModulePath, bindHosts: args.bindHosts, port: args.port }, null, 2)}\n`,
   );
 } else {
   const shellQuote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
@@ -88,9 +96,11 @@ if (args.dryRun) {
   const launcher = launcherLines.join("\n");
   await fs.mkdir(path.dirname(hostPath), { recursive: true, mode: 0o700 });
   await fs.writeFile(hostPath, launcher, { mode: 0o700 });
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(target, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o644 });
-  process.stdout.write(`Installed native host manifest: ${target}\n`);
+  for (const destination of [target, ...extraTargets]) {
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.writeFile(destination, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o644 });
+    process.stdout.write(`Installed native host manifest: ${destination}\n`);
+  }
   process.stdout.write("Reload the Chrome extension to connect.\n");
   if (args.bindHosts) {
     process.stdout.write(`Bridge bind hosts: ${args.bindHosts}\n`);

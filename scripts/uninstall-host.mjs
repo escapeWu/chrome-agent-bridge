@@ -20,8 +20,16 @@ function candidates() {
   ];
 }
 
+// --user-data-dir <dir> (repeatable) also removes the manifest installed there.
+const userDataDirs = [];
+const argv = process.argv.slice(2);
+for (let index = 0; index < argv.length; index += 1) {
+  if (argv[index] !== "--user-data-dir" || !argv[index + 1]) throw new Error(`Unknown argument: ${argv[index]}`);
+  userDataDirs.push(path.join(path.resolve(argv[++index]), "NativeMessagingHosts", `${HOST_NAME}.json`));
+}
+
 let removed = 0;
-for (const candidate of [...candidates(), path.join(bridgeDirectory(), "native-host-launcher")]) {
+for (const candidate of [...candidates(), ...userDataDirs, path.join(bridgeDirectory(), "native-host-launcher")]) {
   try {
     await fs.unlink(candidate);
     process.stdout.write(`Removed ${candidate}\n`);

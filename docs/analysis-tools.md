@@ -2,7 +2,7 @@
 
 Chrome Agent Bridge 0.8 adds 77 clean-room analysis tools in three batches. They are implemented with public JavaScript, source-map, binary-format, WebAssembly, and Chrome DevTools Protocol contracts. No JS Hook MCP code is copied, and no JS Hook service is required.
 
-The 19 existing browser-control tools remain available, for 96 MCP tools in total. Agents should install the paired `chrome-agent-control` Skill and load only the scenario reference it routes to.
+The 20 browser-control tools (including `browser_list_instances`) remain available, for 97 MCP tools in total. Agents should install the paired `chrome-agent-control` Skill and load only the scenario reference it routes to.
 
 ## What was intentionally excluded
 

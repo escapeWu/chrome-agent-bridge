@@ -16,6 +16,21 @@
         </div>
       </header>
 
+      <section class="token-card instance-card" aria-labelledby="instance-heading">
+        <div class="section-title">
+          <h2 id="instance-heading">This browser</h2>
+          <code id="instance-id" class="inline">Unavailable</code>
+        </div>
+        <label class="field">
+          <span>Name shown to agents</span>
+          <input id="label" type="text" maxlength="64" autocomplete="off" disabled>
+        </label>
+        <div class="actions">
+          <button id="save-label" class="primary" type="button" disabled>Save name</button>
+        </div>
+        <p class="hint">Agents pick a browser by this name or ID when several are connected.</p>
+      </section>
+
       <section class="token-card" aria-labelledby="token-heading">
         <div class="section-title">
           <h2 id="token-heading">Local authentication token</h2>

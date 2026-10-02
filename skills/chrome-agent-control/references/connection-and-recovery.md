@@ -10,6 +10,17 @@ Read this reference only when installing the bridge or when status/authenticatio
 4. Local agents automatically read the long-lived token from `~/.chrome-agent-bridge/auth.json`.
 5. Only a deliberately separate local process should receive the popup token through `CHROME_AGENT_BRIDGE_TOKEN`. Keep it out of chat, logs, commands, and project files.
 
+## Several browsers
+
+Each Chrome profile (or `--user-data-dir`) registers as its own browser with an `instanceId` and a user-editable label (extension popup).
+
+- `browser_list_instances` shows each browser, whether it is reachable, and its tab count.
+- `browser_ambiguous`: more than one browser is connected and no `browser` was given. Retry with an `instanceId` or label; do not pick one silently.
+- `browser_not_found`: the selector matches nothing. Re-list; the browser may have closed or its host restarted.
+- `browser_mismatch`: a `sessionId` and `browser` point at different browsers. Drop `browser`; the session already identifies its browser.
+- `browser_cdp_attach` and `browser_network_start` return session IDs prefixed with the instance (`<instanceId>~raw_…`). Pass them back unchanged.
+- `browser_watch_events` cursors are per browser; keep one cursor for each.
+
 ## Recover
 
 - `unauthorized`: reread the local auth file automatically. If the credential may be stale or exposed, ask the user to select **Renew** and **Confirm renew** in the extension popup; the old token becomes invalid immediately.

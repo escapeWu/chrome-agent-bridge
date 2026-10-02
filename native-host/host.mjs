@@ -10,7 +10,7 @@ import {
 } from "../lib/auth-token.mjs";
 import {
   bridgeBindHosts,
-  bridgeBindPort,
+  bridgePortCandidates,
   bridgeDirectory,
   DEFAULT_TIMEOUT_MS,
   isLoopbackHost,
@@ -18,6 +18,15 @@ import {
   localAddresses,
   runtimeFile,
 } from "../lib/config.mjs";
+import {
+  defaultInstanceLabel,
+  isProcessAlive,
+  isValidInstanceId,
+  normalizeLabel,
+  readInstanceRecord,
+  removeInstanceRecord,
+  writeInstanceRecord,
+} from "../lib/instance-registry.mjs";
 import { encodeNativeMessage, NativeMessageDecoder } from "../lib/native-messaging.mjs";
 
 let authState = await loadOrCreateAuthState();
@@ -30,6 +39,12 @@ let extensionVersion = "0.0.0";
 let previousTabs = null;
 let cleanedUp = false;
 let runtimeIdentity = null;
+let instanceIdentity = null;
+let registerChain = Promise.resolve();
+let markRuntimeReady;
+const runtimeReady = new Promise((resolve) => {
+  markRuntimeReady = resolve;
+});
 
 function log(message) {
   process.stderr.write(`[chrome-agent-bridge] ${message}\n`);
@@ -220,6 +235,54 @@ function recordEvent(event, data) {
   }
 }
 
+const CONFLICT_GRACE_MS = 2_000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Publish this host in instances/<id>.json so a router can reach it by browser
+ * identity. Changes are serialized: hello and a later rename must not interleave.
+ */
+function queueRegistration(request) {
+  registerChain = registerChain
+    .then(() => registerInstance(request))
+    .catch((error) => log(`Instance registration failed: ${error.message}`));
+}
+
+async function registerInstance({ instanceId, label }) {
+  await runtimeReady;
+  const existing = await readInstanceRecord(instanceId);
+  if (existing && existing.pid !== process.pid) {
+    // A restarting service worker briefly leaves the previous host alive; wait it out.
+    const deadline = Date.now() + CONFLICT_GRACE_MS;
+    while (isProcessAlive(existing.pid) && Date.now() < deadline) await sleep(100);
+    if (isProcessAlive(existing.pid)) {
+      sendNative({ type: "instance.conflict", instanceId });
+      return;
+    }
+  }
+  if (instanceIdentity && instanceIdentity.instanceId !== instanceId) {
+    await removeInstanceRecord(instanceIdentity.instanceId, process.pid);
+  }
+  const sameInstance = instanceIdentity?.instanceId === instanceId;
+  instanceIdentity = {
+    instanceId,
+    label: normalizeLabel(label ?? (sameInstance ? instanceIdentity.label : undefined) ?? defaultInstanceLabel(instanceId), instanceId),
+  };
+  await writeInstanceRecord({
+    instanceId,
+    label: instanceIdentity.label,
+    host: runtimeIdentity.host,
+    hosts: runtimeIdentity.hosts,
+    port: runtimeIdentity.port,
+    pid: process.pid,
+    startedAt: runtimeIdentity.startedAt,
+    extensionVersion,
+  });
+}
+
 function handleExtensionMessage(message) {
   if (message?.type === "auth.request") {
     void handleAuthRequest(message);
@@ -227,7 +290,18 @@ function handleExtensionMessage(message) {
   }
   if (message?.type === "hello") {
     extensionVersion = typeof message.extensionVersion === "string" ? message.extensionVersion : "0.0.0";
-    sendNative({ type: "hello", ok: true, host: "chrome-agent-bridge", version: "0.8.0" });
+    // An extension that predates instance registration still gets a record, keyed
+    // by this host's pid, so it stays routable next to newer browsers.
+    const instanceId = isValidInstanceId(message.instanceId) ? message.instanceId : `legacy-${process.pid}`;
+    const label = typeof message.label === "string" && message.label.trim()
+      ? message.label
+      : isValidInstanceId(message.instanceId) ? undefined : `Chrome (pid ${process.pid})`;
+    sendNative({ type: "hello", ok: true, host: "chrome-agent-bridge", version: "0.8.0", instanceId });
+    queueRegistration({ instanceId, label });
+    return;
+  }
+  if (message?.type === "instance.update" && instanceIdentity) {
+    queueRegistration({ instanceId: instanceIdentity.instanceId, label: message.label });
     return;
   }
   if (message?.type === "event" && typeof message.event === "string") {
@@ -337,21 +411,26 @@ async function startBridgeServers() {
 
   // The first address that binds successfully fixes the shared port; the rest
   // reuse it so every reachable address serves the same RPC endpoint.
-  const initialPort = await bridgeBindPort();
+  // A port range lets several browser instances on one machine each take a free
+  // port; the first host that binds fixes the port for the remaining addresses.
+  const candidates = await bridgePortCandidates();
   let port = null;
   const boundHosts = [];
   for (const host of bindHosts) {
-    const server = http.createServer(handleRequest);
-    try {
-      await listenOn(server, port ?? initialPort, host);
-    } catch (error) {
-      log(`Could not bind ${host}:${port ?? initialPort}: ${error.message}`);
-      server.close();
-      continue;
+    for (const candidate of port == null ? candidates : [port]) {
+      const server = http.createServer(handleRequest);
+      try {
+        await listenOn(server, candidate, host);
+      } catch (error) {
+        log(`Could not bind ${host}:${candidate}: ${error.message}`);
+        server.close();
+        continue;
+      }
+      servers.push(server);
+      boundHosts.push(host);
+      if (port == null) port = server.address().port;
+      break;
     }
-    servers.push(server);
-    boundHosts.push(host);
-    if (port == null) port = server.address().port;
   }
   if (port == null) throw new Error("Could not bind any Chrome Agent Bridge address");
 
@@ -379,6 +458,7 @@ async function startBridgeServers() {
     startedAt: new Date().toISOString(),
   };
   await writePrivateJsonAtomic(runtimeFile(), runtimeIdentity);
+  markRuntimeReady();
   sendNative({ type: "ready", ok: true, version: "0.8.0" });
 }
 
@@ -407,6 +487,11 @@ async function cleanup() {
   }
   eventWaiters.clear();
   for (const server of servers) server.close();
+  if (instanceIdentity) {
+    await removeInstanceRecord(instanceIdentity.instanceId, process.pid).catch((error) => {
+      log(`Cleanup warning: ${error.message}`);
+    });
+  }
   try {
     const current = JSON.parse(await fs.readFile(runtimeFile(), "utf8"));
     if (current?.pid === runtimeIdentity?.pid && current?.port === runtimeIdentity?.port) {

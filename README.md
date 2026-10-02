@@ -175,6 +175,31 @@ Client configuration:
 
 When binding a non-loopback address, the token is the only access control; restrict the address to a trusted network and rotate the token from the extension popup if it leaks.
 
+### Multiple browsers
+
+One MCP entry can drive several Chrome profiles or `--user-data-dir` instances on the same machine. Each browser registers itself as `~/.chrome-agent-bridge/instances/<instanceId>.json` when its extension connects. The ID is generated once per profile and stored in `chrome.storage.local`; the display name defaults to `Chrome-xxxx` and can be edited in the extension popup.
+
+```text
+browser_list_instances        → [{ instanceId: "inst_3f9a…", label: "Work", reachable, tabCount }, …]
+browser_list_tabs  { browser: "Work" }
+browser_snapshot   { browser: "inst_3f9a…", tabId }
+browser_cdp_attach { browser: "Work", tabId }  → sessionId "inst_3f9a…~raw_…"
+browser_cdp_send   { sessionId, … }            → no browser needed; the session names it
+```
+
+A browser is chosen in this order: the tool's `browser` argument (instance ID or label), the instance in a prefixed `sessionId`, `CHROME_AGENT_BRIDGE_INSTANCE`, then the only connected browser. With several browsers and no selector the call fails with `browser_ambiguous` instead of guessing, so an action never lands in the wrong signed-in account. With one browser nothing needs to be configured.
+
+To add a Chrome started with its own `--user-data-dir`, install the native host manifest there too (repeat the flag for each directory), then load the extension in that Chrome:
+
+```bash
+npm run install-host -- --user-data-dir ~/chrome-work --user-data-dir ~/chrome-test
+npm run uninstall-host -- --user-data-dir ~/chrome-work
+```
+
+Several profiles inside one Chrome share a manifest and need no extra flag. Hosts use ephemeral ports by default. For predictable ports, give each host a range (`CHROME_AGENT_BRIDGE_PORT_RANGE=42360-42379` or `"portRange": [42360, 42379]` in `network.json`); each host takes the first free port. A copied profile directory carries the same ID; the second browser detects the clash and generates a new identity.
+
+For a browser on another machine, run `npm run start:http` there: one URL then reaches every browser on that machine through the same `browser` argument. Without it, a remote client sees a single endpoint (see below).
+
 ### Optional LAN access
 
 The native host binds `127.0.0.1` by default. An operator can additionally bind one or more explicit local addresses so a client on another machine (or a container/host pair) can reach the same authenticated RPC endpoint. The bearer token is still required for every request.
@@ -223,10 +248,11 @@ The repository is also a Codex plugin: `.codex-plugin/plugin.json` registers the
 
 ## Tools
 
-The server exposes 96 tools: 19 browser primitives and 77 analysis tools grouped into three batches. The full names, prerequisites, exclusions, and recommended call chains are in [docs/analysis-tools.md](./docs/analysis-tools.md).
+The server exposes 97 tools: 20 browser primitives and 77 analysis tools grouped into three batches. The full names, prerequisites, exclusions, and recommended call chains are in [docs/analysis-tools.md](./docs/analysis-tools.md).
 
 Browser primitives:
 
+- `browser_list_instances`
 - `browser_status`
 - `browser_list_tabs`
 - `browser_open_tab`

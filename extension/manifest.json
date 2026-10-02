@@ -9,6 +9,7 @@
     "debugger",
     "nativeMessaging",
     "scripting",
+    "storage",
     "tabs"
   ],
   "host_permissions": [
