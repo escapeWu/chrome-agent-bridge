@@ -54,6 +54,24 @@ test("URL MCP service installer dry-run renders a private env file and unit", as
   await fs.rm(configHome, { recursive: true, force: true });
 });
 
+test("URL MCP service installer stores no token copy unless --token is given", async () => {
+  const bridgeDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-agent-mcp-notoken-"));
+  const configHome = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-agent-mcp-notoken-cfg-"));
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [path.join(root, "scripts", "install-mcp-http-service.mjs"), "--dry-run"],
+    { env: { ...process.env, CHROME_AGENT_BRIDGE_DIR: bridgeDir, XDG_CONFIG_HOME: configHome } },
+  );
+  const { envContent } = JSON.parse(stdout);
+  assert.equal(/MCP_TOKEN=/.test(envContent), false);
+  assert.equal(/cab_/.test(envContent), false);
+  assert.match(envContent, /CHROME_AGENT_BRIDGE_MCP_PORT=43118/);
+  // The installer must not create auth.json just to copy it elsewhere.
+  await assert.rejects(() => fs.stat(path.join(bridgeDir, "auth.json")), (error) => error.code === "ENOENT");
+  await fs.rm(bridgeDir, { recursive: true, force: true });
+  await fs.rm(configHome, { recursive: true, force: true });
+});
+
 test("URL MCP service installer rejects an invalid host or port", async () => {
   await assert.rejects(() =>
     execFileAsync(process.execPath, [
