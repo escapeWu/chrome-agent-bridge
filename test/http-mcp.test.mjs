@@ -1,3 +1,4 @@
+import { VERSION } from "../lib/version.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import net from "node:net";
@@ -101,7 +102,7 @@ test("URL MCP exposes the same tools behind a bearer token", async (context) => 
   assert.equal(initialized.status, 200);
   const initPayload = parseSse(initialized.text);
   assert.equal(initPayload.result.serverInfo.name, "chrome-agent-bridge");
-  assert.equal(initPayload.result.serverInfo.version, "0.8.0");
+  assert.equal(initPayload.result.serverInfo.version, VERSION);
 
   const listed = await rpc(url, TOKEN, { jsonrpc: "2.0", id: 2, method: "tools/list" });
   assert.equal(listed.status, 200);
