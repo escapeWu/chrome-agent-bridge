@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+// Chrome service workers have a global `crypto`; Node 18 does not.
+globalThis.crypto ??= webcrypto;
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 

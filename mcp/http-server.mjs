@@ -14,7 +14,7 @@
  *   CHROME_AGENT_BRIDGE_MCP_TOKEN  expected bearer token
  *                                  (default: CHROME_AGENT_BRIDGE_TOKEN, else auth.json)
  */
-import crypto from "node:crypto";
+import crypto, { webcrypto } from "node:crypto";
 import http from "node:http";
 import process from "node:process";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -27,6 +27,9 @@ import {
   parseHostList,
 } from "../lib/config.mjs";
 import { createBridgeServer } from "./create-server.mjs";
+
+// Node 18 has no global `crypto`, which the SDK's Streamable HTTP transport uses.
+globalThis.crypto ??= webcrypto;
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
