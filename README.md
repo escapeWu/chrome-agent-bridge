@@ -97,7 +97,9 @@ Agents can use this section as an installation and connection checklist:
 6. Install and enable the paired `chrome-agent-control` Skill. Do not treat MCP configuration alone as a complete Agent installation.
 7. Call `browser_status`, then `browser_list_tabs`. Do not begin browser actions until the bridge reports connected.
 
-For page interaction, take `browser_snapshot`, act once with `browser_act` using a returned ref, then take a new snapshot and verify. Refs are deliberately short-lived and invalidated after an action or navigation. A high-level click performs its full CDP mouse sequence atomically inside the extension; do not split `mouseMoved`, `mousePressed`, and `mouseReleased` across Raw MCP calls. For tab monitoring, call `browser_watch_events` with the previous cursor and, when useful, a specific `tabId`. Start sanitized request monitoring before the intended UI action, page through `browser_network_poll`, and always finish with `browser_network_stop`. When Raw commands and a safe network summary are both required, attach Raw with `captureEvents=false` and pass its session ID to `browser_network_start` as `rawSessionId`; this shares one Chrome debugger attachment. Do not fall back to Resource Timing or page-level fetch/XHR hooks merely because the page's performance buffer is full.
+For page interaction, take `browser_snapshot`, act once with `browser_act` using a returned ref and that snapshot's `snapshotId`, then take a new snapshot and verify. Refs are deliberately short-lived and invalidated after an action or navigation. A high-level click performs its full CDP mouse sequence atomically inside the extension; do not split `mouseMoved`, `mousePressed`, and `mouseReleased` across Raw MCP calls. For tab monitoring, call `browser_watch_events` with the previous cursor and, when useful, a specific `tabId`. Start sanitized request monitoring before the intended UI action, page through `browser_network_poll`, and always finish with `browser_network_stop`. When Raw commands and a safe network summary are both required, attach Raw with `captureEvents=false` and pass its session ID to `browser_network_start` as `rawSessionId`; this shares one Chrome debugger attachment. Do not fall back to Resource Timing or page-level fetch/XHR hooks merely because the page's performance buffer is full.
+
+Raw and network sessions hold their tab under an idle lease (default 5 minutes, configurable per session with `leaseTtlMs`). Valid calls renew it, and in-flight commands or waiting long polls keep it. An expired, idle lease is taken over only when another request needs the tab, so a task that exits without detaching no longer blocks others indefinitely. A `debugger_target_busy` error names the current holder, its expiry, and a retry delay. `browser_debugger_sessions` lists holders, `browser_debugger_renew` extends a lease, and `browser_debugger_recover` releases a stuck attachment, guarded by `expectedSessionId` and, for a live lease, `confirmed=true`. Page actions pass `snapshotId` with a ref, and pass `debuggerSessionId` when the task holds a lease on the tab; they never borrow another task's attachment.
 
 Never submit forms, purchase, publish, delete, send messages, or change permissions without the user's explicit approval. The high-level fill tool rejects password fields, but Raw CDP bypasses those high-level guardrails and may expose cookies, storage, credentials, and private page content.
 
@@ -274,8 +276,11 @@ Browser primitives:
 - `browser_cdp_send`
 - `browser_cdp_events`
 - `browser_cdp_detach`
+- `browser_debugger_sessions`
+- `browser_debugger_renew`
+- `browser_debugger_recover`
 
-Prefer `browser_snapshot → browser_act(ref) → browser_snapshot`. `browser_click` and `browser_fill` remain selector-based compatibility tools.
+Prefer `browser_snapshot → browser_act(ref, snapshotId) → browser_snapshot`. `browser_click` and `browser_fill` remain selector-based compatibility tools.
 
 Analysis groups:
 

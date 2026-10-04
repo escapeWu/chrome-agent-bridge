@@ -128,7 +128,7 @@ test("semantic snapshot refs drive one atomic CDP click and become stale afterwa
     assert.equal(snapshot.result.elements[0].ref, "e1");
     assert.equal("_locator" in snapshot.result.elements[0], false);
 
-    const clicked = await request(harness, "click", "page.act", { tabId: 42, kind: "click", ref: "e1" });
+    const clicked = await request(harness, "click", "page.act", { tabId: 42, kind: "click", ref: "e1", snapshotId: snapshot.result.snapshotId });
     assert.equal(clicked.ok, true);
     assert.equal(clicked.result.clicked, true);
     assert.equal(clicked.result.needsSnapshot, true);
@@ -143,7 +143,7 @@ test("semantic snapshot refs drive one atomic CDP click and become stale afterwa
       ],
     );
 
-    const stale = await request(harness, "stale", "page.act", { tabId: 42, kind: "click", ref: "e1" });
+    const stale = await request(harness, "stale", "page.act", { tabId: 42, kind: "click", ref: "e1", snapshotId: snapshot.result.snapshotId });
     assert.equal(stale.ok, false);
     assert.equal(stale.error.code, "stale_ref");
   } finally {
@@ -156,8 +156,8 @@ test("atomic click re-resolves once when hover shifts the target", async () => {
     inspectResults: [{ ok: true }, { ok: false }, { ok: true }, { ok: true }],
   });
   try {
-    await request(harness, "snapshot", "page.snapshot", { tabId: 42 });
-    const clicked = await request(harness, "click-retry", "page.act", { tabId: 42, kind: "click", ref: "e1" });
+    const snapshot = await request(harness, "snapshot", "page.snapshot", { tabId: 42 });
+    const clicked = await request(harness, "click-retry", "page.act", { tabId: 42, kind: "click", ref: "e1", snapshotId: snapshot.result.snapshotId });
     assert.equal(clicked.ok, true);
     assert.equal(clicked.result.attempts, 2);
     assert.deepEqual(
@@ -173,8 +173,10 @@ test("page actions reuse an existing Raw attachment for keyboard input", async (
   const { harness, restore } = await loadHarness();
   try {
     const raw = await request(harness, "raw", "raw.attach", { tabId: 42, captureEvents: false });
-    await request(harness, "snapshot", "page.snapshot", { tabId: 42 });
-    const pressed = await request(harness, "press", "page.act", { tabId: 42, kind: "press", ref: "e1", key: "ArrowDown" });
+    const snapshot = await request(harness, "snapshot", "page.snapshot", { tabId: 42 });
+    const pressed = await request(harness, "press", "page.act", {
+      tabId: 42, kind: "press", ref: "e1", snapshotId: snapshot.result.snapshotId, key: "ArrowDown", debuggerSessionId: raw.result.sessionId,
+    });
     assert.equal(pressed.ok, true);
     assert.equal(pressed.result.pressed, true);
     assert.equal(harness.debuggerCalls.filter((call) => call[0] === "attach").length, 1);
@@ -194,16 +196,67 @@ test("page actions reuse an existing Raw attachment for keyboard input", async (
 test("fill and native select use the prepared semantic target without a debugger attachment", async () => {
   const { harness, restore } = await loadHarness();
   try {
-    await request(harness, "snapshot-fill", "page.snapshot", { tabId: 42 });
-    const filled = await request(harness, "fill", "page.act", { tabId: 42, kind: "fill", ref: "e1", value: "hello" });
+    const fillSnapshot = await request(harness, "snapshot-fill", "page.snapshot", { tabId: 42 });
+    const filled = await request(harness, "fill", "page.act", { tabId: 42, kind: "fill", ref: "e1", snapshotId: fillSnapshot.result.snapshotId, value: "hello" });
     assert.equal(filled.ok, true);
     assert.equal(filled.result.length, 5);
 
-    await request(harness, "snapshot-select", "page.snapshot", { tabId: 42 });
-    const selected = await request(harness, "select", "page.act", { tabId: 42, kind: "select", ref: "e1", values: ["15 minute"] });
+    const selectSnapshot = await request(harness, "snapshot-select", "page.snapshot", { tabId: 42 });
+    const selected = await request(harness, "select", "page.act", { tabId: 42, kind: "select", ref: "e1", snapshotId: selectSnapshot.result.snapshotId, values: ["15 minute"] });
     assert.equal(selected.ok, true);
     assert.deepEqual(selected.result.values, ["15 minute"]);
     assert.equal(harness.debuggerCalls.length, 0);
+  } finally {
+    restore();
+  }
+});
+
+test("a ref needs its own snapshotId and never resolves against a newer snapshot", async () => {
+  const { harness, restore } = await loadHarness();
+  try {
+    const first = await request(harness, "snapshot-a", "page.snapshot", { tabId: 42 });
+    const missing = await request(harness, "no-snapshot-id", "page.act", { tabId: 42, kind: "click", ref: "e1" });
+    assert.equal(missing.error.code, "snapshot_id_required");
+
+    // Another task snapshots the same tab; the first task's e1 must not hit the new e1.
+    const second = await request(harness, "snapshot-b", "page.snapshot", { tabId: 42 });
+    assert.notEqual(first.result.snapshotId, second.result.snapshotId);
+    const stale = await request(harness, "old-ref", "page.act", {
+      tabId: 42, kind: "click", ref: "e1", snapshotId: first.result.snapshotId,
+    });
+    assert.equal(stale.error.code, "stale_ref");
+    assert.equal(harness.debuggerCalls.length, 0);
+
+    const current = await request(harness, "new-ref", "page.act", {
+      tabId: 42, kind: "click", ref: "e1", snapshotId: second.result.snapshotId,
+    });
+    assert.equal(current.ok, true);
+  } finally {
+    restore();
+  }
+});
+
+test("page actions never borrow another task's live debugger lease", async () => {
+  const { harness, restore } = await loadHarness();
+  try {
+    const raw = await request(harness, "raw-owner", "raw.attach", { tabId: 42, captureEvents: false, ownerLabel: "task-a" });
+    const snapshot = await request(harness, "snapshot", "page.snapshot", { tabId: 42 });
+
+    const borrowed = await request(harness, "borrow", "page.act", {
+      tabId: 42, kind: "press", ref: "e1", snapshotId: snapshot.result.snapshotId, key: "Enter",
+    });
+    assert.equal(borrowed.ok, false);
+    assert.equal(borrowed.error.code, "debugger_target_busy");
+    assert.equal(borrowed.error.details.occupant.sessionId, raw.result.sessionId);
+    assert.equal(borrowed.error.details.occupant.ownerLabel, "task-a");
+
+    const wrong = await request(harness, "wrong-credential", "page.act", {
+      tabId: 42, kind: "press", ref: "e1", snapshotId: snapshot.result.snapshotId, key: "Enter",
+      debuggerSessionId: "raw_00000000-0000-0000-0000-000000000000",
+    });
+    assert.equal(wrong.error.code, "debugger_session_mismatch");
+    assert.equal(harness.debuggerCalls.some((call) => call[2] === "Input.dispatchKeyEvent"), false);
+
   } finally {
     restore();
   }

@@ -100,7 +100,22 @@ function fakeBridge(label) {
     request.on("end", () => {
       const { method, params } = JSON.parse(body);
       calls.push({ method, params });
-      const result = method === "raw.attach" ? { sessionId: `raw_${label.padEnd(24, "0")}`, tabId: params.tabId }
+      const holder = `raw_${label.padEnd(24, "0")}`;
+      if (method === "raw.attach" && params.tabId === 99) {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({
+          ok: false,
+          error: {
+            code: "debugger_target_busy",
+            message: "busy",
+            details: { tabId: 99, occupant: { sessionId: holder, kind: "raw", projections: [{ sessionId: `net_${label}`, rawSessionId: holder }] } },
+          },
+        }));
+        return;
+      }
+      const result = method === "raw.attach" ? { sessionId: holder, tabId: params.tabId }
+        : method === "debugger.sessions" ? { sessions: [{ sessionId: holder, projections: [{ sessionId: `net_${label}`, rawSessionId: holder }] }] }
+        : method === "raw.send" ? { result: { sessionId: "cdp-target-session" } }
         : method === "tabs.list" ? [{ id: 1, title: label }]
         : method === "browser.status" ? { connected: true, extensionVersion: "0.8.0" }
         : { ok: true, params };
@@ -154,6 +169,49 @@ test("callBridge routes by selector and session prefix, and strips routing field
 
     const listed = await listBrowserInstances();
     assert.deepEqual(listed.map((item) => item.label).sort(), ["Home", "Work"]);
+  });
+});
+
+test("nested debugger session IDs and busy details carry the owning browser", async (context) => {
+  await withBridgeDir(async (dir) => {
+    await fs.writeFile(path.join(dir, "auth.json"), JSON.stringify({
+      schemaVersion: 1, token: `cab_${"a".repeat(43)}`, createdAt: "2026-01-01T00:00:00.000Z", rotatedAt: "2026-01-01T00:00:00.000Z",
+    }), { mode: 0o600 });
+    const work = await fakeBridge("work");
+    const home = await fakeBridge("home");
+    context.after(() => { work.server.close(); home.server.close(); });
+    await writeInstanceRecord(record("inst_workworkwork", "Work", { port: work.port }));
+    await writeInstanceRecord(record("inst_homehomehome", "Home", { port: home.port }));
+
+    const listed = await callBridge("debugger.sessions", { browser: "Work" });
+    assert.equal(listed.sessions[0].sessionId, "inst_workworkwork~raw_work00000000000000000000");
+    assert.equal(listed.sessions[0].projections[0].sessionId, "inst_workworkwork~net_work");
+    assert.equal(listed.sessions[0].projections[0].rawSessionId, "inst_workworkwork~raw_work00000000000000000000");
+
+    // Raw CDP payloads are never rewritten, even when they contain a sessionId.
+    const sent = await callBridge("raw.send", { sessionId: "inst_workworkwork~raw_x", method: "Target.attachToTarget" });
+    assert.equal(sent.result.sessionId, "cdp-target-session");
+
+    // The same tab number in another profile is a different tab: Work's holder
+    // never blocks Home.
+    await assert.rejects(callBridge("raw.attach", { browser: "Work", tabId: 99 }), (error) => {
+      assert.equal(error.code, "debugger_target_busy");
+      assert.deepEqual(error.details.browser, { instanceId: "inst_workworkwork", label: "Work" });
+      assert.equal(error.details.occupant.sessionId, "inst_workworkwork~raw_work00000000000000000000");
+      assert.equal(error.details.occupant.projections[0].sessionId, "inst_workworkwork~net_work");
+      return true;
+    });
+    assert.equal(home.calls.length, 0);
+
+    // Credential fields route by their prefix and conflict with another browser.
+    await callBridge("page.act", { tabId: 99, kind: "press", debuggerSessionId: "inst_homehomehome~raw_h" });
+    assert.equal(home.calls.at(-1).params.debuggerSessionId, "raw_h");
+    await callBridge("debugger.recover", { tabId: 99, expectedSessionId: "inst_homehomehome~raw_h" });
+    assert.equal(home.calls.at(-1).params.expectedSessionId, "raw_h");
+    await assert.rejects(
+      callBridge("debugger.recover", { browser: "Work", tabId: 99, expectedSessionId: "inst_homehomehome~raw_h" }),
+      (error) => error.code === "browser_mismatch",
+    );
   });
 });
 

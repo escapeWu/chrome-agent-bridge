@@ -107,6 +107,28 @@ test("native host forwards authenticated loopback RPC to the extension stream", 
     result: { connected: true, extensionVersion: "test" },
   });
 
+  const busyPromise = fetch(`http://127.0.0.1:${runtime.port}/rpc`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${renewAuth.result.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ method: "raw.attach", params: { tabId: 42 } }),
+  });
+  const busyRequest = await nextMessage((message) => message.type === "request" && message.method === "raw.attach");
+  const busyDetails = { tabId: 42, occupant: { sessionId: "raw_holder", kind: "raw", inFlight: 0 }, retryAfterMs: 1_000 };
+  child.stdin.write(
+    encodeNativeMessage({
+      type: "response",
+      id: busyRequest.id,
+      ok: false,
+      error: { code: "debugger_target_busy", message: "busy", details: busyDetails },
+    }),
+  );
+  const busy = await busyPromise;
+  assert.equal(busy.status, 502);
+  assert.deepEqual((await busy.json()).error, { code: "debugger_target_busy", message: "busy", details: busyDetails });
+
   child.stdin.write(
     encodeNativeMessage({
       type: "event",

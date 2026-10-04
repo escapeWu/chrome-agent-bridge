@@ -59,7 +59,13 @@ function serializeError(error, fallbackCode = "bridge_error") {
   return {
     code: typeof error?.code === "string" ? error.code : fallbackCode,
     message: error instanceof Error ? error.message : String(error),
+    ...(isDetails(error?.details) ? { details: error.details } : {}),
   };
+}
+
+/** Structured error context from the extension, such as who holds a debugger. */
+function isDetails(value) {
+  return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 function isAuthorized(header, expectedToken) {
@@ -104,6 +110,9 @@ function forwardToExtension(method, params) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       pending.delete(id);
+      // Only this RPC stops waiting. The extension may still be running the
+      // request (for example a Chrome command), so callers must re-inspect
+      // state rather than assume it failed or retry a write blindly.
       const error = new Error(`Extension request timed out: ${method}`);
       error.code = "extension_timeout";
       reject(error);
@@ -320,6 +329,7 @@ function handleExtensionMessage(message) {
   else {
     const error = new Error(message?.error?.message || "Chrome extension request failed");
     error.code = message?.error?.code || "extension_error";
+    if (isDetails(message?.error?.details)) error.details = message.error.details;
     request.reject(error);
   }
 }

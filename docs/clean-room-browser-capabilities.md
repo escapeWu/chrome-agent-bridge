@@ -55,7 +55,7 @@ This boundary keeps sensitive data out of Native Messaging, the loopback RPC ser
 
 ## High-level page-control contract
 
-`browser_snapshot` emits visible interactive elements with semantic roles, accessible names, and short-lived refs. Refs are stored only in the extension service worker, belong to the latest snapshot on one tab, and are invalidated after navigation or any successful action.
+`browser_snapshot` emits visible interactive elements with semantic roles, accessible names, and short-lived refs. Refs are stored only in the extension service worker, belong to the latest snapshot on one tab, and are invalidated after navigation or any successful action. An action passes the `snapshotId` of the snapshot that produced its ref, so a ref from a replaced snapshot is rejected as stale rather than resolved against the newer one.
 
 `browser_act` resolves a current ref by exact role/name/nth semantics with stable ID, test ID, and selector fallbacks. A click scrolls the target into view, waits two animation frames, checks `document.elementFromPoint`, sends hover/press/release through one extension request, and retries target preparation once if hover shifts the hit target. Keyboard presses use CDP input. Fill and native select use DOM setters plus input/change events; password fields remain rejected.
 

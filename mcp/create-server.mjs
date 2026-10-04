@@ -27,6 +27,8 @@ const BROWSER_BOUND_TOOLS = new Set([
   "browser_watch_events",
   "browser_network_start",
   "browser_cdp_attach",
+  "browser_debugger_sessions",
+  "browser_debugger_recover",
 ]);
 
 const browserSelector = z
@@ -63,9 +65,16 @@ export function createBridgeServer() {
               code,
               message: error instanceof Error ? error.message : String(error),
               ...(Array.isArray(error?.instances) ? { instances: error.instances } : {}),
+              ...(error?.details && typeof error.details === "object" ? { details: error.details } : {}),
               recovery:
                 code === "browser_ambiguous" || code === "browser_not_found"
                   ? "Call browser_list_instances, then retry with the browser parameter set to an instanceId or label."
+                  : code === "debugger_target_busy"
+                  ? "Another session holds this tab; details.occupant says who. If it is yours, pass its session ID. Otherwise retry after details.retryAfterMs: an idle, expired lease is taken over automatically. Use browser_debugger_recover only with user approval."
+                  : code === "debugger_session_mismatch"
+                  ? "Pass the session ID that currently holds the tab (see details.occupant), or omit debuggerSessionId when this task holds none."
+                  : code === "snapshot_id_required" || code === "stale_ref"
+                  ? "Take a fresh browser_snapshot and pass its snapshotId with the ref."
                   : code === "bridge_offline"
                   ? "Ensure the unpacked extension and native host are installed, reload the extension, then retry."
                   : code === "unauthorized"
@@ -238,15 +247,27 @@ export function createBridgeServer() {
     {
       title: "Act on page element",
       description:
-        "Perform one atomic high-level action. Prefer a ref from the latest browser_snapshot. Clicks run a complete CDP mouse sequence inside one request; press supports common navigation keys; select is for native <select> controls.",
+        "Perform one atomic high-level action. Prefer a ref plus snapshotId from the latest browser_snapshot. Clicks run a complete CDP mouse sequence inside one request; press supports common navigation keys; select is for native <select> controls.",
       inputSchema: {
         tabId: z.number().int().nonnegative(),
         kind: z.enum(["click", "fill", "press", "select"]),
         ref: z.string().regex(/^e\d+$/).optional().describe("Short-lived ref from the latest browser_snapshot on the same tab."),
+        snapshotId: z
+          .string()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("Required with ref: the snapshotId returned by the browser_snapshot that produced the ref."),
         selector: z.string().min(1).max(2_000).optional().describe("Compatibility fallback when no snapshot ref is available."),
         value: z.string().max(100_000).optional().describe("Required for fill; accepted as one value for select."),
         values: z.array(z.string().max(1_000)).min(1).max(100).optional().describe("Values or labels for native select."),
         key: z.string().min(1).max(40).optional().describe("Required for press, for example ArrowDown, Enter, Escape, Tab, or a single character."),
+        debuggerSessionId: z
+          .string()
+          .min(20)
+          .max(120)
+          .optional()
+          .describe("Raw or network session ID this task holds on the tab. Required when the tab has a live debugger lease; omit otherwise."),
         confirmed: z
           .boolean()
           .optional()
@@ -265,6 +286,12 @@ export function createBridgeServer() {
       inputSchema: {
         tabId: z.number().int().nonnegative(),
         selector: z.string().min(1).max(2_000),
+        debuggerSessionId: z
+          .string()
+          .min(20)
+          .max(120)
+          .optional()
+          .describe("Raw or network session ID this task holds on the tab. Required when the tab has a live debugger lease; omit otherwise."),
         confirmed: z
           .boolean()
           .optional()
@@ -284,6 +311,12 @@ export function createBridgeServer() {
         tabId: z.number().int().nonnegative(),
         selector: z.string().min(1).max(2_000),
         value: z.string().max(100_000),
+        debuggerSessionId: z
+          .string()
+          .min(20)
+          .max(120)
+          .optional()
+          .describe("Raw or network session ID this task holds on the tab. Required when the tab has a live debugger lease; omit otherwise."),
       },
     },
     async (input) => asText(await callBridge("page.fill", input)),
@@ -323,7 +356,7 @@ export function createBridgeServer() {
     {
       title: "Start network monitoring",
       description:
-        "Start a tab-scoped, metadata-only Chrome network monitor. Pass rawSessionId to reuse that Raw CDP attachment instead of attaching a second debugger. Headers and bodies are never returned.",
+        "Start a tab-scoped, metadata-only Chrome network monitor. Pass rawSessionId to reuse that Raw CDP attachment instead of attaching a second debugger. Headers and bodies are never returned. Without rawSessionId the monitor holds the tab under an idle lease; always stop it.",
       inputSchema: {
         tabId: z.number().int().nonnegative(),
         rawSessionId: rawSessionId.optional(),
@@ -332,6 +365,14 @@ export function createBridgeServer() {
         urlIncludes: z.array(z.string().max(200)).max(20).optional().default([]),
         maxEvents: z.number().int().min(1).max(1_000).optional().default(500),
         maxBytes: z.number().int().min(65_536).max(4_000_000).optional().default(1_000_000),
+        leaseTtlMs: z
+          .number()
+          .int()
+          .min(30_000)
+          .max(3_600_000)
+          .optional()
+          .describe("Idle period after which another task may take over the attachment (default 300000). Any valid call renews it."),
+        ownerLabel: z.string().max(64).optional().describe("Diagnostic label shown to other tasks that find the tab busy; not an identity."),
       },
     },
     async (input) => asText(await callBridge("network.start", input)),
@@ -370,15 +411,27 @@ export function createBridgeServer() {
     {
       title: "Attach Raw CDP",
       description:
-        "Attach an unrestricted Chrome DevTools Protocol session to one tab. Set captureEvents=false when only commands plus a sanitized network projection are needed; captured Raw events may expose credentials and private data.",
+        "Attach an unrestricted Chrome DevTools Protocol session to one tab. Set captureEvents=false when only commands plus a sanitized network projection are needed; captured Raw events may expose credentials and private data. The session holds the tab under an idle lease that any valid call renews; always detach. If the tab is busy, the error names the holder.",
       inputSchema: {
         tabId: z.number().int().nonnegative(),
         captureEvents: z.boolean().optional().default(true),
         maxEvents: z.number().int().min(1).max(1_000).optional().default(500),
         maxBytes: z.number().int().min(65_536).max(64 * 1024 * 1024).optional().default(1_000_000),
+        leaseTtlMs: z
+          .number()
+          .int()
+          .min(30_000)
+          .max(3_600_000)
+          .optional()
+          .describe("Idle period after which another task may take over the attachment (default 300000). Any valid call renews it."),
+        ownerLabel: z.string().max(64).optional().describe("Diagnostic label shown to other tasks that find the tab busy; not an identity."),
       },
     },
-    async (input) => asText(await callBridge("raw.attach", input)),
+    async (input) => {
+      const result = await callBridge("raw.attach", input);
+      if (result?.reclaimed?.sessionId) clearCdpAnalysisSession(result.reclaimed.sessionId);
+      return asText(result);
+    },
   );
 
   tool(
@@ -428,6 +481,54 @@ export function createBridgeServer() {
       } finally {
         clearCdpAnalysisSession(input.sessionId);
       }
+    },
+  );
+
+  tool(
+    "browser_debugger_sessions",
+    {
+      title: "List debugger sessions",
+      description:
+        "List the Raw CDP and network sessions holding tab debugger attachments in one browser, with owner label, lease expiry, in-flight commands, and network projections. Read-only; it does not renew any lease.",
+      inputSchema: { tabId: z.number().int().nonnegative().optional().describe("Limit to one tab.") },
+    },
+    async (input) => asText(await callBridge("debugger.sessions", input)),
+  );
+
+  tool(
+    "browser_debugger_renew",
+    {
+      title: "Renew debugger lease",
+      description:
+        "Renew the idle lease of a Raw CDP or network session this task holds, optionally changing its length. Use during long pauses between calls.",
+      inputSchema: {
+        sessionId: rawSessionId,
+        leaseTtlMs: z.number().int().min(30_000).max(3_600_000).optional(),
+      },
+    },
+    async (input) => asText(await callBridge("debugger.renew", input)),
+  );
+
+  tool(
+    "browser_debugger_recover",
+    {
+      title: "Recover debugger attachment",
+      description:
+        "Release a tab's debugger attachment left by another session. Pass the occupant's sessionId as expectedSessionId; the call fails if the holder changed. An expired, idle lease is released directly; a live one requires confirmed=true after explicit user approval. Detaching does not undo navigation, evaluation, or storage changes the holder made.",
+      inputSchema: {
+        tabId: z.number().int().nonnegative(),
+        expectedSessionId: rawSessionId,
+        confirmed: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("Set true only after the user explicitly approves ending a live session."),
+      },
+    },
+    async (input) => {
+      const result = await callBridge("debugger.recover", input);
+      if (result?.previous?.sessionId) clearCdpAnalysisSession(result.previous.sessionId);
+      return asText(result);
     },
   );
 
