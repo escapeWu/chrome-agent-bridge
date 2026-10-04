@@ -19,17 +19,17 @@ Minimal call shapes:
 
 ```text
 browser_snapshot({tabId})
-browser_act({tabId, kind:"click", ref:"e12", confirmed:false})
-browser_act({tabId, kind:"fill", ref:"e4", value:"text"})
-browser_act({tabId, kind:"press", ref:"e7", key:"ArrowDown"})
-browser_act({tabId, kind:"select", ref:"e9", values:["15 minute"]})
+browser_act({tabId, kind:"click", ref:"e12", snapshotId, confirmed:false})
+browser_act({tabId, kind:"fill", ref:"e4", snapshotId, value:"text"})
+browser_act({tabId, kind:"press", ref:"e7", snapshotId, key:"ArrowDown"})
+browser_act({tabId, kind:"select", ref:"e9", snapshotId, values:["15 minute"]})
 browser_watch_events({afterCursor, tabId?, timeoutMs?})
 ```
 
 ## Action loop
 
 1. Take a fresh `browser_snapshot` before acting on an unfamiliar or changed page.
-2. Select a semantic ref from that snapshot. Refs belong only to the latest snapshot on the same tab.
+2. Select a semantic ref from that snapshot and pass it with that snapshot's `snapshotId`. Refs belong only to the latest snapshot on the same tab; if another snapshot replaced yours, the action fails with `stale_ref` instead of hitting a different element.
 3. Perform one intentional `browser_act` action.
 4. Take a fresh snapshot and verify authoritative state after the action. Never reuse the previous ref.
 5. Leave pre-existing tabs open. Close only task-created tabs when cleanup was requested.
@@ -49,6 +49,9 @@ Use `kind:"select"` only for a native `<select>`. For ARIA combobox/listbox widg
 - Supported URLs are `http:`, `https:`, `file:`, and `about:blank`. File URLs may require the user to enable file access for the extension. Chrome-internal pages cannot be inspected or scripted.
 - `tab_not_found`: refresh the tab list and select again.
 - `stale_ref` or `action_target_not_found`: take a fresh snapshot and select a current ref.
+- `snapshot_id_required`: pass the `snapshotId` from the snapshot that produced the ref.
+- `debugger_target_busy`: another task's Raw or network session holds the tab. If the session is yours, pass it as `debuggerSessionId`; otherwise follow the busy guidance in [raw-cdp.md](raw-cdp.md).
+- `debugger_session_mismatch`: `debuggerSessionId` does not hold this tab; omit it when the task holds no session.
 - `action_target_moved` or `element_not_receiving_pointer`: inspect a fresh snapshot or screenshot; do not repeat blindly.
 - `selector_not_found`: selector compatibility calls require a fresh current selector.
 - `restricted_page`: ask the user to open a normal web page.

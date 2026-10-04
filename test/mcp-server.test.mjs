@@ -55,6 +55,9 @@ test("MCP server exposes the browser and analysis tool surface", async (context)
       "browser_cdp_send",
       "browser_click",
       "browser_close_tab",
+      "browser_debugger_recover",
+      "browser_debugger_renew",
+      "browser_debugger_sessions",
       "browser_fill",
       "browser_list_instances",
       "browser_list_tabs",
@@ -140,9 +143,23 @@ test("MCP server exposes the browser and analysis tool surface", async (context)
   assert.equal(rawAttach.inputSchema.properties.captureEvents.default, true);
   assert.equal(rawAttach.inputSchema.properties.maxBytes.maximum, 64 * 1024 * 1024);
 
+  assert.equal(rawAttach.inputSchema.properties.leaseTtlMs.minimum, 30_000);
+  assert.equal(rawAttach.inputSchema.properties.leaseTtlMs.maximum, 3_600_000);
+  assert.equal(rawAttach.inputSchema.properties.ownerLabel.type, "string");
+  assert.equal(networkStart.inputSchema.properties.leaseTtlMs.type, "integer");
+
   const pageAct = tools.find((tool) => tool.name === "browser_act");
   assert.deepEqual(pageAct.inputSchema.properties.kind.enum, ["click", "fill", "press", "select"]);
   assert.equal(pageAct.inputSchema.properties.ref.pattern, "^e\\d+$");
+  assert.equal(pageAct.inputSchema.properties.snapshotId.type, "string");
+  assert.equal(pageAct.inputSchema.properties.debuggerSessionId.type, "string");
+
+  const recover = tools.find((tool) => tool.name === "browser_debugger_recover");
+  assert.deepEqual(recover.inputSchema.required.sort(), ["expectedSessionId", "tabId"]);
+  assert.equal(recover.inputSchema.properties.confirmed.default, false);
+  assert.equal(recover.inputSchema.properties.browser.type, "string");
+  const sessions = tools.find((tool) => tool.name === "browser_debugger_sessions");
+  assert.equal(sessions.inputSchema.properties.browser.type, "string");
 
   const collectCode = tools.find((tool) => tool.name === "collect_code");
   assert.equal(collectCode.inputSchema.required.includes("sessionId"), true);

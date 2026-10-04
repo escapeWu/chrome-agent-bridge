@@ -6,7 +6,7 @@ Read this reference only when the task requires request, response, completion, f
 
 1. Call `browser_network_start` for the selected tab before the user-requested action.
 2. Apply `resourceTypes` or `urlIncludes` filters when they reduce unrelated traffic.
-3. Perform only the authorized action that should trigger the request.
+3. Perform only the authorized action that should trigger the request. Pass the monitor's `sessionId` (or the Raw `sessionId` when sharing one) to `browser_act` as `debuggerSessionId`; without it the tab is reported busy.
 4. Page through `browser_network_poll` using its cursor until the needed lifecycle is complete.
 5. Always call `browser_network_stop`, including after errors.
 
@@ -29,6 +29,7 @@ Resource type values are lowercase. Reuse each poll result's cursor as the next 
 - URL credentials and fragments, headers, bodies, security details, WebSocket frames, cookies, and raw CDP request IDs are never returned.
 - `browser_network_poll` returns public request IDs and sanitized lifecycle events. Finished and failed events include `method`, `status` when known, and CDP-monotonic `durationMs`.
 - `browser_network_stop` detaches Chrome only when the network session owns the debugger attachment.
+- A monitor that owns the attachment holds the tab under the same idle lease as Raw (see [raw-cdp.md](raw-cdp.md)); polling renews it. A Raw-backed projection renews its Raw session and ends when that session is detached or taken over.
 
 ## Share a Raw attachment
 

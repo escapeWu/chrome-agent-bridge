@@ -20,6 +20,7 @@ Each Chrome profile (or `--user-data-dir`) registers as its own browser with an 
 - `browser_mismatch`: a `sessionId` and `browser` point at different browsers. Drop `browser`; the session already identifies its browser.
 - `browser_cdp_attach` and `browser_network_start` return session IDs prefixed with the instance (`<instanceId>~raw_…`). Pass them back unchanged.
 - `browser_watch_events` cursors are per browser; keep one cursor for each.
+- `browser_debugger_sessions` lists which sessions hold tab debugger attachments in one browser, with lease expiry and owner labels. Busy errors and the list return prefixed IDs; a session in one browser never blocks a tab in another.
 
 ## Recover
 

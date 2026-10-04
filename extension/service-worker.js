@@ -17,6 +17,13 @@ const MAX_RAW_EVENT_BYTES = 2_500_000;
 const MAX_RAW_POLL_BYTES = 2_500_000;
 const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
 const MAX_LABEL_LENGTH = 64;
+// A debugger lease is the idle period after which another task may take over a
+// tab's attachment. Expiry only permits a takeover; it does not prove the
+// holder is gone, so nothing is torn down until another task asks for the tab.
+const DEFAULT_LEASE_TTL_MS = 5 * 60_000;
+const MIN_LEASE_TTL_MS = 30_000;
+const MAX_LEASE_TTL_MS = 60 * 60_000;
+const ACTIVE_RETRY_AFTER_MS = 2_000;
 let nativePort = null;
 let instance = null;
 let instanceLoad = null;
@@ -32,17 +39,23 @@ const rawSessionByTabId = new Map();
 const rawSessionByChildSessionId = new Map();
 const pageSnapshotsByTabId = new Map();
 const pageActionChains = new Map();
+// Tabs whose debugger ownership is changing (attach, takeover, or teardown in
+// progress, or a short page action). Set synchronously before any await so two
+// requests can never both pass the ownership check for one tab.
+const tabClaims = new Map();
 
 function errorPayload(error, fallbackCode = "extension_error") {
   return {
     code: typeof error?.code === "string" ? error.code : fallbackCode,
     message: error instanceof Error ? error.message : String(error),
+    ...(error?.details && typeof error.details === "object" ? { details: error.details } : {}),
   };
 }
 
-function codedError(code, message) {
+function codedError(code, message, details) {
   const error = new Error(message);
   error.code = code;
+  if (details) error.details = details;
   return error;
 }
 
@@ -615,9 +628,17 @@ async function actionLocator(tabId, params) {
     if (typeof params.ref !== "string" || !/^e\d+$/.test(params.ref)) {
       throw codedError("invalid_ref", "ref must look like e1, e2, and so on");
     }
+    if (typeof params.snapshotId !== "string" || params.snapshotId.length === 0) {
+      throw codedError("snapshot_id_required", "Pass the snapshotId returned by browser_snapshot together with ref");
+    }
     const snapshot = pageSnapshotsByTabId.get(tabId);
     if (!snapshot) {
       throw codedError("stale_ref", "No current snapshot exists for this tab. Take browser_snapshot and retry.");
+    }
+    if (snapshot.id !== params.snapshotId) {
+      // Another snapshot of this tab replaced the caller's; the same ref name may
+      // now point at a different element, so never resolve it silently.
+      throw codedError("stale_ref", "A newer snapshot replaced this one. Take a fresh browser_snapshot and retry.");
     }
     const tab = await requireTab(tabId);
     if (tab.url !== snapshot.url) {
@@ -636,18 +657,47 @@ async function actionLocator(tabId, params) {
   throw codedError("invalid_action", "The action requires a ref from the latest snapshot or a CSS selector");
 }
 
-function bridgeOwnsDebugger(tabId) {
-  const rawSession = rawSessions.get(rawSessionByTabId.get(tabId));
-  if (rawSession?.state === "running") return true;
-  const networkSession = networkSessions.get(networkSessionByTabId.get(tabId));
-  return networkSession?.state === "running";
+/**
+ * Decide how a page action may use the tab's debugger. A caller that holds the
+ * tab's lease passes its session ID and reuses that attachment. Without one,
+ * the action claims the tab for its duration (taking over an expired lease if
+ * needed) and attaches only briefly; it never borrows another task's lease.
+ */
+async function pageDebuggerAccess(tabId, debuggerSessionId) {
+  if (debuggerSessionId == null) {
+    const access = await acquireTab(tabId, "page", {
+      busyMessage: `A debugger session holds tab ${tabId}; pass its debuggerSessionId if it is yours`,
+    });
+    return { root: null, reclaimed: access.reclaimed, release: access.release };
+  }
+  if (typeof debuggerSessionId !== "string") {
+    throw codedError("invalid_request", "debuggerSessionId must be a string");
+  }
+  const root = rootSessionFor(tabId);
+  if (!root || !sessionHoldsRoot(debuggerSessionId, root)) {
+    throw codedError(
+      "debugger_session_mismatch",
+      `debuggerSessionId does not hold tab ${tabId}`,
+      occupancyDetails(tabId),
+    );
+  }
+  root.inFlight += 1;
+  touchLease(root);
+  return {
+    root,
+    reclaimed: null,
+    release() {
+      root.inFlight -= 1;
+      touchLease(root);
+    },
+  };
 }
 
-async function withPageDebugger(tabId, operation) {
+async function withPageDebugger(tabId, access, operation) {
   if (!chrome.debugger?.attach || !chrome.debugger?.sendCommand) {
     throw codedError("page_control_not_supported", "Chrome debugger API is unavailable");
   }
-  const reuseAttachment = bridgeOwnsDebugger(tabId);
+  const reuseAttachment = access.root != null;
   let attached = false;
   try {
     if (!reuseAttachment) {
@@ -712,11 +762,12 @@ async function pageAction(params) {
   assertScriptable(tab);
   return serializePageAction(params.tabId, async () => {
     const locator = await actionLocator(params.tabId, params);
+    const access = await pageDebuggerAccess(params.tabId, params.debuggerSessionId);
     const marker = `cab-${crypto.randomUUID()}`;
     let prepared = null;
     try {
       if (params.kind === "click") {
-        const result = await withPageDebugger(params.tabId, async (target) => {
+        const result = await withPageDebugger(params.tabId, access, async (target) => {
           for (let attempt = 1; attempt <= 2; attempt += 1) {
             prepared = await execute(params.tabId, prepareActionTarget, [locator, marker, "click", params.confirmed === true]);
             const hit = await execute(params.tabId, inspectPreparedTarget, [marker, prepared.x, prepared.y]);
@@ -773,7 +824,7 @@ async function pageAction(params) {
           throw codedError("invalid_action", "press requires a key string");
         }
         const descriptor = keyDescriptor(params.key);
-        const result = await withPageDebugger(params.tabId, async (target) => {
+        const result = await withPageDebugger(params.tabId, access, async (target) => {
           await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { type: "keyDown", ...descriptor });
           const { text, ...keyUpDescriptor } = descriptor;
           await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { type: "keyUp", ...keyUpDescriptor });
@@ -805,6 +856,7 @@ async function pageAction(params) {
           // Cleanup is best-effort when a successful action navigates or replaces the target.
         }
       }
+      access.release();
     }
   });
 }
@@ -1026,16 +1078,323 @@ function requireNetworkSession(sessionId) {
   return session;
 }
 
+function leaseOptions(params) {
+  const leaseTtlMs = integerParameter(params.leaseTtlMs, "leaseTtlMs", {
+    defaultValue: DEFAULT_LEASE_TTL_MS,
+    min: MIN_LEASE_TTL_MS,
+    max: MAX_LEASE_TTL_MS,
+  });
+  if (params.ownerLabel != null && typeof params.ownerLabel !== "string") {
+    throw codedError("invalid_request", "ownerLabel must be a string");
+  }
+  const ownerLabel = typeof params.ownerLabel === "string"
+    ? params.ownerLabel.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, MAX_LABEL_LENGTH)
+    : "";
+  return { leaseTtlMs, ownerLabel: ownerLabel || null };
+}
+
+function initLease(session, { leaseTtlMs, ownerLabel }) {
+  session.leaseTtlMs = leaseTtlMs;
+  session.ownerLabel = ownerLabel;
+  session.lastUsedAt = Date.now();
+  session.inFlight = 0;
+}
+
+/** The session holding the tab's Chrome attachment, if the bridge holds one. */
+function rootSessionFor(tabId) {
+  const raw = rawSessions.get(rawSessionByTabId.get(tabId));
+  if (raw?.state === "running") return raw;
+  const network = networkSessions.get(networkSessionByTabId.get(tabId));
+  if (network?.state === "running" && network.attachmentOwner === "network") return network;
+  return null;
+}
+
+/** A network projection's lease is its Raw root's lease. */
+function rootOf(session) {
+  if (session.kind === "network" && session.attachmentOwner === "raw") {
+    return rawSessions.get(session.rawSessionId) ?? null;
+  }
+  return session;
+}
+
+function projectionsOf(root) {
+  if (root.kind !== "raw") return [];
+  const network = networkSessions.get(networkSessionByTabId.get(root.tabId));
+  return network?.state === "running" && network.rawSessionId === root.id ? [network] : [];
+}
+
+function sessionHoldsRoot(sessionId, root) {
+  return sessionId === root.id || projectionsOf(root).some((projection) => projection.id === sessionId);
+}
+
+function touchLease(session) {
+  const now = Date.now();
+  session.lastUsedAt = now;
+  const root = rootOf(session);
+  if (root) root.lastUsedAt = now;
+}
+
+function leaseExpiresAt(root) {
+  return root.lastUsedAt + root.leaseTtlMs;
+}
+
+/** Commands still awaiting Chrome, or a long poll still waiting, keep a lease. */
+function leaseActive(root) {
+  return root.inFlight > 0 ||
+    root.waiters.size > 0 ||
+    projectionsOf(root).some((projection) => projection.waiters.size > 0);
+}
+
+function leaseReclaimable(root, now = Date.now()) {
+  return !leaseActive(root) && now >= leaseExpiresAt(root);
+}
+
+function describeSession(session, now = Date.now()) {
+  const described = {
+    sessionId: session.id,
+    kind: session.kind,
+    tabId: session.tabId,
+    state: session.state,
+    ...(session.endReason ? { endReason: session.endReason } : {}),
+    createdAt: session.createdAt,
+    lastUsedAt: new Date(session.lastUsedAt).toISOString(),
+    ownerLabel: session.ownerLabel ?? null,
+  };
+  if (session.kind === "network") {
+    described.attachmentOwner = session.attachmentOwner;
+    if (session.rawSessionId) described.rawSessionId = session.rawSessionId;
+  }
+  if (rootOf(session) !== session) return described;
+  return {
+    ...described,
+    leaseTtlMs: session.leaseTtlMs,
+    expiresAt: new Date(leaseExpiresAt(session)).toISOString(),
+    expired: now >= leaseExpiresAt(session),
+    inFlight: session.inFlight,
+    waiting: session.waiters.size,
+    active: leaseActive(session),
+    ...(session.kind === "raw" ? { childTargets: session.childSessionIds.size } : {}),
+  };
+}
+
+function describeRoot(root, now = Date.now()) {
+  return {
+    ...describeSession(root, now),
+    projections: projectionsOf(root).map((projection) => describeSession(projection, now)),
+  };
+}
+
+/** Bounded, ID-bearing details explaining who holds a tab and when to retry. */
+function occupancyDetails(tabId, now = Date.now()) {
+  const claim = tabClaims.get(tabId);
+  if (claim) {
+    return {
+      tabId,
+      occupant: { kind: claim.kind, state: "changing", since: new Date(claim.since).toISOString() },
+      retryAfterMs: ACTIVE_RETRY_AFTER_MS,
+    };
+  }
+  const root = rootSessionFor(tabId);
+  if (!root) return { tabId, occupant: null };
+  return {
+    tabId,
+    occupant: describeRoot(root, now),
+    retryAfterMs: leaseActive(root)
+      ? ACTIVE_RETRY_AFTER_MS
+      : Math.max(0, leaseExpiresAt(root) - now),
+  };
+}
+
+function claimTab(tabId, kind) {
+  const claim = { kind, since: Date.now() };
+  tabClaims.set(tabId, claim);
+  return () => {
+    if (tabClaims.get(tabId) === claim) tabClaims.delete(tabId);
+  };
+}
+
+/**
+ * Reserve a tab for a new attachment. A live lease makes the request busy; an
+ * expired, idle lease is closed first (lazy takeover on contention). The check
+ * and the claim happen before any await, so concurrent requests cannot both win.
+ */
+async function acquireTab(tabId, kind, { busyMessage } = {}) {
+  const now = Date.now();
+  const root = rootSessionFor(tabId);
+  if (tabClaims.has(tabId) || (root && !leaseReclaimable(root, now))) {
+    throw codedError(
+      "debugger_target_busy",
+      busyMessage || `A debugger session already owns tab ${tabId}`,
+      occupancyDetails(tabId, now),
+    );
+  }
+  const release = claimTab(tabId, kind);
+  if (!root) return { reclaimed: null, release };
+  try {
+    const reclaimed = describeRoot(root, now);
+    const cleanupError = await closeRootSession(root, "reclaimed", "lease_expired");
+    return { reclaimed: { ...reclaimed, ...(cleanupError ? { cleanupError } : {}) }, release };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
+function finishNetworkSession(session, state, endReason) {
+  session.state = state;
+  if (endReason) session.endReason = endReason;
+  if (networkSessionByTabId.get(session.tabId) === session.id) networkSessionByTabId.delete(session.tabId);
+  resolveNetworkWaiters(session);
+}
+
+function finishRawSession(session, state, endReason) {
+  const projections = projectionsOf(session);
+  session.state = state;
+  if (endReason) session.endReason = endReason;
+  for (const projection of projections) finishNetworkSession(projection, "detached", endReason || state);
+  if (rawSessionByTabId.get(session.tabId) === session.id) rawSessionByTabId.delete(session.tabId);
+  for (const childSessionId of session.childSessionIds) {
+    unregisterRawChildSession(session, childSessionId);
+  }
+  resolveRawWaiters(session);
+}
+
+/**
+ * Release the Chrome attachment held by a root session. Only the session that
+ * currently owns the tab's index is ever detached, so a stale ID cannot tear
+ * down a newer owner. Chrome's detach also clears this client's Debugger
+ * pauses, breakpoints, Fetch interception, and profilers. Returns a cleanup
+ * error message when Chrome reported one.
+ */
+async function closeRootSession(root, finalState, endReason) {
+  if (root.state !== "running") return null;
+  const projections = projectionsOf(root);
+  root.state = "stopping";
+  for (const projection of projections) finishNetworkSession(projection, "detached", endReason || finalState);
+  const release = tabClaims.has(root.tabId) ? () => {} : claimTab(root.tabId, "stopping");
+  let cleanupError = null;
+  try {
+    if (root.kind === "network") {
+      try {
+        await chrome.debugger.sendCommand({ tabId: root.tabId }, "Network.disable");
+      } catch {
+        // The tab or debugger may already be gone.
+      }
+    }
+    try {
+      await chrome.debugger.detach({ tabId: root.tabId });
+    } catch (error) {
+      // Usually the target is already detached or closed. A real failure
+      // surfaces again as a refused attach for the next owner.
+      cleanupError = error instanceof Error ? error.message : String(error);
+    }
+  } finally {
+    if (root.kind === "raw") finishRawSession(root, finalState, endReason);
+    else finishNetworkSession(root, finalState, endReason);
+    release();
+  }
+  return cleanupError;
+}
+
+function findDebuggerSession(sessionId) {
+  if (typeof sessionId === "string" && sessionId.startsWith("net_")) return requireNetworkSession(sessionId);
+  return requireRawSession(sessionId);
+}
+
+function listDebuggerSessions(params) {
+  const tabId = params.tabId == null ? null : integerParameter(params.tabId, "tabId", {
+    defaultValue: 0,
+    min: 0,
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  const now = Date.now();
+  const tabIds = new Set([...rawSessionByTabId.keys(), ...networkSessionByTabId.keys(), ...tabClaims.keys()]);
+  const sessions = [];
+  const claims = [];
+  for (const id of [...tabIds].sort((a, b) => a - b)) {
+    if (tabId != null && id !== tabId) continue;
+    const root = rootSessionFor(id);
+    if (root) sessions.push(describeRoot(root, now));
+    const claim = tabClaims.get(id);
+    if (claim) claims.push({ tabId: id, kind: claim.kind, since: new Date(claim.since).toISOString() });
+  }
+  return { now: new Date(now).toISOString(), sessions, claims };
+}
+
+function renewDebuggerSession(params) {
+  const session = findDebuggerSession(params.sessionId);
+  const root = rootOf(session);
+  if (session.state !== "running" || root?.state !== "running") {
+    throw codedError("debugger_session_ended", `Debugger session is ${session.state}`, {
+      session: describeSession(session),
+    });
+  }
+  if (params.leaseTtlMs != null) {
+    root.leaseTtlMs = integerParameter(params.leaseTtlMs, "leaseTtlMs", {
+      defaultValue: DEFAULT_LEASE_TTL_MS,
+      min: MIN_LEASE_TTL_MS,
+      max: MAX_LEASE_TTL_MS,
+    });
+  }
+  touchLease(session);
+  return { renewed: true, lease: describeRoot(root) };
+}
+
+/**
+ * Manually release a tab's attachment. expectedSessionId guards against the
+ * holder changing between inspection and recovery; a lease that is still live
+ * (unexpired or with work in flight) is released only with confirmed=true.
+ * Detaching never rolls back navigation, evaluation, or storage side effects.
+ */
+async function recoverDebuggerSession(params) {
+  const tab = await requireTab(params.tabId);
+  if (typeof params.expectedSessionId !== "string" || params.expectedSessionId.length === 0) {
+    throw codedError("invalid_request", "expectedSessionId is required");
+  }
+  const now = Date.now();
+  if (tabClaims.has(tab.id)) {
+    throw codedError("debugger_target_busy", `Tab ${tab.id} is changing debugger ownership`, occupancyDetails(tab.id, now));
+  }
+  const root = rootSessionFor(tab.id);
+  if (!root) {
+    throw codedError("debugger_session_not_found", `No debugger session holds tab ${tab.id}`, { tabId: tab.id, occupant: null });
+  }
+  if (root.id !== params.expectedSessionId) {
+    throw codedError(
+      "debugger_session_changed",
+      "The tab is held by a different session than expectedSessionId; inspect it again",
+      occupancyDetails(tab.id, now),
+    );
+  }
+  const reclaimable = leaseReclaimable(root, now);
+  if (!reclaimable && params.confirmed !== true) {
+    throw codedError(
+      "confirmation_required",
+      "The lease is still live; release it only with confirmed=true after the user approves",
+      occupancyDetails(tab.id, now),
+    );
+  }
+  const previous = describeRoot(root, now);
+  const release = claimTab(tab.id, "recover");
+  try {
+    const cleanupError = await closeRootSession(root, "reclaimed", reclaimable ? "lease_expired" : "recovered");
+    return {
+      recovered: true,
+      tabId: tab.id,
+      previous,
+      abandonedInFlight: previous.inFlight,
+      ...(cleanupError ? { cleanupError } : {}),
+    };
+  } finally {
+    release();
+  }
+}
+
 async function startNetworkSession(params) {
   const tab = await requireTab(params.tabId);
   assertScriptable(tab);
   if (!chrome.debugger?.attach || !chrome.debugger?.sendCommand) {
     throw codedError("network_not_supported", "Chrome debugger API is unavailable");
-  }
-  const existingId = networkSessionByTabId.get(params.tabId);
-  const existing = existingId ? networkSessions.get(existingId) : null;
-  if (existing?.state === "running") {
-    throw codedError("network_session_exists", `A network session is already running for tab ${params.tabId}`);
   }
   let rawSession = null;
   if (params.rawSessionId != null) {
@@ -1046,10 +1405,11 @@ async function startNetworkSession(params) {
     if (rawSession.tabId !== params.tabId) {
       throw codedError("raw_target_not_found", "rawSessionId is attached to a different tab");
     }
+    if (projectionsOf(rawSession).length > 0) {
+      throw codedError("network_session_exists", `A network session is already running for tab ${params.tabId}`);
+    }
   }
-  if (rawSessionByTabId.has(params.tabId) && !rawSession) {
-    throw codedError("debugger_target_busy", `A Raw CDP session already owns tab ${params.tabId}`);
-  }
+  const lease = rawSession ? null : leaseOptions(params);
 
   const maxEvents = integerParameter(params.maxEvents, "maxEvents", {
     defaultValue: DEFAULT_NETWORK_MAX_EVENTS,
@@ -1083,6 +1443,7 @@ async function startNetworkSession(params) {
 
   const session = {
     id: `net_${crypto.randomUUID()}`,
+    kind: "network",
     tabId: params.tabId,
     state: "starting",
     createdAt: new Date().toISOString(),
@@ -1102,32 +1463,52 @@ async function startNetworkSession(params) {
     nextPublicRequestId: 1,
     waiters: new Set(),
   };
+  if (lease) initLease(session, lease);
+  else session.lastUsedAt = Date.now();
+  // A Raw-backed projection rides the Raw attachment and its lease; otherwise
+  // this session takes the tab, possibly taking over an expired lease.
+  const access = rawSession ? null : await acquireTab(params.tabId, "network");
+  if (rawSession) {
+    rawSession.inFlight += 1;
+    touchLease(rawSession);
+  }
   let attached = false;
   try {
-    if (!rawSession) {
-      await chrome.debugger.attach({ tabId: params.tabId }, CDP_PROTOCOL_VERSION);
-      attached = true;
-    }
-    await chrome.debugger.sendCommand({ tabId: params.tabId }, "Network.enable", {
-      maxTotalBufferSize: maxBytes,
-      maxResourceBufferSize: Math.min(maxBytes, 1_000_000),
-    });
-  } catch (error) {
-    if (attached) {
-      try {
-        await chrome.debugger.detach({ tabId: params.tabId });
-      } catch {
-        // Ignore cleanup failure after an enable error.
+    try {
+      if (!rawSession) {
+        await chrome.debugger.attach({ tabId: params.tabId }, CDP_PROTOCOL_VERSION);
+        attached = true;
       }
+      await chrome.debugger.sendCommand({ tabId: params.tabId }, "Network.enable", {
+        maxTotalBufferSize: maxBytes,
+        maxResourceBufferSize: Math.min(maxBytes, 1_000_000),
+      });
+    } catch (error) {
+      if (attached) {
+        try {
+          await chrome.debugger.detach({ tabId: params.tabId });
+        } catch {
+          // Ignore cleanup failure after an enable error.
+        }
+      }
+      throw codedError(
+        "network_permission_denied",
+        error instanceof Error ? error.message : "Chrome refused the network debugging session",
+      );
     }
-    throw codedError(
-      "network_permission_denied",
-      error instanceof Error ? error.message : "Chrome refused the network debugging session",
-    );
+    if (rawSession && rawSession.state !== "running") {
+      throw codedError("raw_session_detached", `Raw CDP session is ${rawSession.state}`);
+    }
+    session.state = "running";
+    networkSessions.set(session.id, session);
+    networkSessionByTabId.set(session.tabId, session.id);
+  } finally {
+    if (rawSession) {
+      rawSession.inFlight -= 1;
+      touchLease(rawSession);
+    }
+    access?.release();
   }
-  session.state = "running";
-  networkSessions.set(session.id, session);
-  networkSessionByTabId.set(session.tabId, session.id);
   return {
     sessionId: session.id,
     tabId: session.tabId,
@@ -1138,6 +1519,8 @@ async function startNetworkSession(params) {
     urlMode,
     attachmentOwner: session.attachmentOwner,
     ...(session.rawSessionId ? { rawSessionId: session.rawSessionId } : {}),
+    lease: describeRoot(rootOf(session)),
+    ...(access?.reclaimed ? { reclaimed: access.reclaimed } : {}),
   };
 }
 
@@ -1158,15 +1541,24 @@ function pollNetworkSession(params) {
     min: 0,
     max: 25_000,
   });
+  touchLease(session);
   const current = networkPollResult(session, afterCursor, limit);
   if (current.events.length > 0 || timeoutMs === 0 || session.state !== "running") {
     return Promise.resolve(current);
   }
+  // A waiting long poll keeps the lease live and renews it when it returns.
   return new Promise((resolve) => {
-    const waiter = { afterCursor, limit, resolve };
+    const waiter = {
+      afterCursor,
+      limit,
+      resolve(result) {
+        touchLease(session);
+        resolve(result);
+      },
+    };
     waiter.timeout = setTimeout(() => {
       session.waiters.delete(waiter);
-      resolve(networkPollResult(session, afterCursor, limit));
+      waiter.resolve(networkPollResult(session, afterCursor, limit));
     }, timeoutMs);
     session.waiters.add(waiter);
   });
@@ -1174,24 +1566,11 @@ function pollNetworkSession(params) {
 
 async function stopNetworkSession(params) {
   const session = requireNetworkSession(params.sessionId);
-  if (session.state !== "stopped") {
-    const wasRunning = session.state === "running";
-    session.state = "stopping";
-    if (wasRunning && session.attachmentOwner === "network") {
-      try {
-        await chrome.debugger.sendCommand({ tabId: session.tabId }, "Network.disable");
-      } catch {
-        // The tab or debugger may already be gone.
-      }
-      try {
-        await chrome.debugger.detach({ tabId: session.tabId });
-      } catch {
-        // Detach is idempotent from the caller's perspective.
-      }
-    }
-    session.state = "stopped";
-    networkSessionByTabId.delete(session.tabId);
-    resolveNetworkWaiters(session);
+  // Stopping an already ended session only reports it; it never touches the
+  // tab's current owner. A Raw-backed projection never detaches its Raw root.
+  if (session.state === "running") {
+    if (session.attachmentOwner === "network") await closeRootSession(session, "stopped");
+    else finishNetworkSession(session, "stopped");
   }
   return {
     sessionId: session.id,
@@ -1203,13 +1582,11 @@ async function stopNetworkSession(params) {
   };
 }
 
-function markNetworkSessionDetached(tabId) {
+function markNetworkSessionDetached(tabId, endReason) {
   const sessionId = networkSessionByTabId.get(tabId);
   const session = sessionId ? networkSessions.get(sessionId) : null;
-  if (!session) return;
-  session.state = "detached";
-  networkSessionByTabId.delete(tabId);
-  resolveNetworkWaiters(session);
+  if (!session || session.state !== "running") return;
+  finishNetworkSession(session, "detached", endReason);
 }
 
 function handleDebuggerEvent(source, method, params) {
@@ -1221,10 +1598,10 @@ function handleDebuggerEvent(source, method, params) {
   recordNetworkEvent(session, networkEventFor(session, method, params ?? {}, source));
 }
 
-function handleDebuggerDetach(source) {
-  const handledRaw = handleRawDebuggerDetach(source);
+function handleDebuggerDetach(source, reason) {
+  const handledRaw = handleRawDebuggerDetach(source, reason);
   if (!Number.isInteger(source?.tabId)) return;
-  if (!handledRaw) markNetworkSessionDetached(source.tabId);
+  if (!handledRaw) markNetworkSessionDetached(source.tabId, reason || "chrome_detached");
 }
 
 function requireRawSession(sessionId) {
@@ -1314,9 +1691,6 @@ async function attachRawSession(params) {
   if (!chrome.debugger?.attach || !chrome.debugger?.sendCommand) {
     throw codedError("raw_cdp_not_supported", "Chrome debugger API is unavailable");
   }
-  if (networkSessionByTabId.has(params.tabId) || rawSessionByTabId.has(params.tabId)) {
-    throw codedError("debugger_target_busy", `A debugger session already owns tab ${params.tabId}`);
-  }
   const maxEvents = integerParameter(params.maxEvents, "maxEvents", {
     defaultValue: DEFAULT_RAW_MAX_EVENTS,
     min: 1,
@@ -1328,8 +1702,10 @@ async function attachRawSession(params) {
     max: MAX_RAW_BYTES,
   });
   const captureEvents = params.captureEvents !== false;
+  const lease = leaseOptions(params);
   const session = {
     id: `raw_${crypto.randomUUID()}`,
+    kind: "raw",
     tabId: tab.id,
     state: "starting",
     createdAt: new Date().toISOString(),
@@ -1343,17 +1719,24 @@ async function attachRawSession(params) {
     childSessionIds: new Set(),
     captureEvents,
   };
+  initLease(session, lease);
+  const access = await acquireTab(session.tabId, "raw");
   try {
-    await chrome.debugger.attach({ tabId: session.tabId }, CDP_PROTOCOL_VERSION);
-  } catch (error) {
-    throw codedError(
-      "raw_permission_denied",
-      error instanceof Error ? error.message : "Chrome refused the Raw CDP session",
-    );
+    try {
+      await chrome.debugger.attach({ tabId: session.tabId }, CDP_PROTOCOL_VERSION);
+    } catch (error) {
+      throw codedError(
+        "raw_permission_denied",
+        error instanceof Error ? error.message : "Chrome refused the Raw CDP session",
+      );
+    }
+    session.state = "running";
+    session.lastUsedAt = Date.now();
+    rawSessions.set(session.id, session);
+    rawSessionByTabId.set(session.tabId, session.id);
+  } finally {
+    access.release();
   }
-  session.state = "running";
-  rawSessions.set(session.id, session);
-  rawSessionByTabId.set(session.tabId, session.id);
   return {
     sessionId: session.id,
     tabId: session.tabId,
@@ -1368,6 +1751,8 @@ async function attachRawSession(params) {
       maxResultBytes: MAX_RAW_RESULT_BYTES,
     },
     captureEvents,
+    lease: describeRoot(session),
+    ...(access.reclaimed ? { reclaimed: access.reclaimed } : {}),
   };
 }
 
@@ -1389,6 +1774,11 @@ async function sendRawCommand(params) {
     }
   }
   const target = targetSessionId ? { sessionId: targetSessionId } : { tabId: session.tabId };
+  // In-flight work keeps the lease from being taken over. A transport timeout
+  // upstream does not end the Chrome command, so the count drops only when
+  // Chrome settles it.
+  session.inFlight += 1;
+  touchLease(session);
   try {
     const result = await chrome.debugger.sendCommand(target, params.method, params.params ?? {});
     if (params.method === "Target.attachToTarget" && typeof result?.sessionId === "string") {
@@ -1408,6 +1798,9 @@ async function sendRawCommand(params) {
   } catch (error) {
     if (typeof error?.code === "string" && error.code.startsWith("raw_")) throw error;
     throw codedError("raw_cdp_error", error instanceof Error ? error.message : String(error));
+  } finally {
+    session.inFlight -= 1;
+    touchLease(session);
   }
 }
 
@@ -1428,15 +1821,23 @@ function pollRawSession(params) {
     min: 0,
     max: 25_000,
   });
+  touchLease(session);
   const current = rawPollResult(session, afterCursor, limit);
   if (current.events.length > 0 || timeoutMs === 0 || session.state !== "running") {
     return Promise.resolve(current);
   }
   return new Promise((resolve) => {
-    const waiter = { afterCursor, limit, resolve };
+    const waiter = {
+      afterCursor,
+      limit,
+      resolve(result) {
+        touchLease(session);
+        resolve(result);
+      },
+    };
     waiter.timeout = setTimeout(() => {
       session.waiters.delete(waiter);
-      resolve(rawPollResult(session, afterCursor, limit));
+      waiter.resolve(rawPollResult(session, afterCursor, limit));
     }, timeoutMs);
     session.waiters.add(waiter);
   });
@@ -1444,24 +1845,9 @@ function pollRawSession(params) {
 
 async function detachRawSession(params) {
   const session = requireRawSession(params.sessionId);
-  if (session.state !== "stopped") {
-    const wasRunning = session.state === "running";
-    session.state = "stopping";
-    markNetworkSessionDetached(session.tabId);
-    if (wasRunning) {
-      try {
-        await chrome.debugger.detach({ tabId: session.tabId });
-      } catch {
-        // The target may already be detached or closed.
-      }
-    }
-    session.state = "stopped";
-    rawSessionByTabId.delete(session.tabId);
-    for (const childSessionId of session.childSessionIds) {
-      unregisterRawChildSession(session, childSessionId);
-    }
-    resolveRawWaiters(session);
-  }
+  // Detaching an already ended (for example reclaimed) session only reports it;
+  // it never touches the tab's current owner or that owner's projection.
+  if (session.state === "running") await closeRootSession(session, "stopped");
   return {
     sessionId: session.id,
     tabId: session.tabId,
@@ -1491,20 +1877,16 @@ function handleRawDebuggerEvent(source, method, params) {
   return true;
 }
 
-function handleRawDebuggerDetach(source) {
+function handleRawDebuggerDetach(source, reason) {
   const session = rawSessionForSource(source);
   if (!session) return false;
   if (typeof source?.sessionId === "string") {
     unregisterRawChildSession(session, source.sessionId);
     return true;
   }
-  session.state = "detached";
-  markNetworkSessionDetached(session.tabId);
-  rawSessionByTabId.delete(session.tabId);
-  for (const childSessionId of session.childSessionIds) {
-    unregisterRawChildSession(session, childSessionId);
-  }
-  resolveRawWaiters(session);
+  // Chrome detached the target itself (DevTools took over, the user cancelled
+  // the debugging infobar, or the target closed).
+  finishRawSession(session, "detached", reason || "chrome_detached");
   return true;
 }
 
@@ -1571,6 +1953,12 @@ async function dispatch(method, params) {
       return pollRawSession(params);
     case "raw.detach":
       return detachRawSession(params);
+    case "debugger.sessions":
+      return listDebuggerSessions(params);
+    case "debugger.renew":
+      return renewDebuggerSession(params);
+    case "debugger.recover":
+      return recoverDebuggerSession(params);
     default:
       throw codedError("method_not_found", `Unsupported method: ${method}`);
   }
@@ -1620,23 +2008,9 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   createdTabIds.delete(tabId);
   pageSnapshotsByTabId.delete(tabId);
   pageActionChains.delete(tabId);
-  const sessionId = networkSessionByTabId.get(tabId);
-  const session = sessionId ? networkSessions.get(sessionId) : null;
-  if (session) {
-    session.state = "detached";
-    networkSessionByTabId.delete(tabId);
-    resolveNetworkWaiters(session);
-  }
-  const rawSessionId = rawSessionByTabId.get(tabId);
-  const rawSession = rawSessionId ? rawSessions.get(rawSessionId) : null;
-  if (rawSession) {
-    rawSession.state = "detached";
-    rawSessionByTabId.delete(tabId);
-    for (const childSessionId of rawSession.childSessionIds) {
-      unregisterRawChildSession(rawSession, childSessionId);
-    }
-    resolveRawWaiters(rawSession);
-  }
+  const rawSession = rawSessions.get(rawSessionByTabId.get(tabId));
+  if (rawSession) finishRawSession(rawSession, "detached", "tab_closed");
+  markNetworkSessionDetached(tabId, "tab_closed");
   emitBrowserEvent("tab.removed", { tabId, ...removeInfo });
 });
 chrome.tabs.onActivated.addListener((activeInfo) => emitBrowserEvent("tab.activated", activeInfo));

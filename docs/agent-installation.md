@@ -103,7 +103,7 @@ The Agent should call:
 2. `browser_status` and require `connected: true`.
 3. `browser_list_tabs` and ask the user which existing tab is in scope when that is not already explicit.
 4. `browser_snapshot` before the first high-level page action.
-5. `browser_act` once with a ref from that snapshot, then take a new snapshot to verify. Never reuse a ref after an action or navigation.
+5. `browser_act` once with a ref and the `snapshotId` from that snapshot, then take a new snapshot to verify. Never reuse a ref after an action or navigation.
 6. Confirm that a local tool such as `understand_code` appears in the MCP tool catalog. It does not need a browser connection and verifies the 0.8 analysis surface is loaded.
 
 Do not guess a tab ID or inspect unrelated tabs.
@@ -126,7 +126,7 @@ An Agent using automatic local discovery normally needs no configuration change 
 For sanitized request lifecycle metadata:
 
 1. Call `browser_network_start` before the user-requested action.
-2. Perform the authorized page action with `browser_snapshot → browser_act(ref) → browser_snapshot`. The action engine reuses an active debugger attachment automatically.
+2. Perform the authorized page action with `browser_snapshot → browser_act(ref, snapshotId) → browser_snapshot`. Pass the monitor's `sessionId` as `debuggerSessionId` so the action reuses the monitor's debugger attachment; without it the tab is reported busy.
 3. Page through `browser_network_poll` using its cursor.
 4. Always call `browser_network_stop`.
 

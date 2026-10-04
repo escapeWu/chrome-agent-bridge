@@ -19,11 +19,17 @@ Use `targetSessionId` only after `Target.attachToTarget` returns it or a `Target
 Minimal call shapes:
 
 ```text
-browser_cdp_attach({tabId, captureEvents:false|true})
+browser_cdp_attach({tabId, captureEvents:false|true, leaseTtlMs?, ownerLabel?})
 browser_cdp_send({sessionId, method, params, targetSessionId?})
 browser_cdp_events({sessionId, afterCursor, limit?, timeoutMs?})
 browser_cdp_detach({sessionId})
 ```
+
+## Leases and a busy tab
+
+A Raw session holds the tab under an idle lease (default 5 minutes, `leaseTtlMs` 30000–3600000). Every valid send or poll renews it; a waiting long poll or an unfinished command keeps it. Call `browser_debugger_renew({sessionId})` before a long pause. Set `ownerLabel` to a short task name so other tasks can see who holds the tab.
+
+`debugger_target_busy` means another session holds the tab; `details.occupant` names it, with `expiresAt`, `inFlight`, and `retryAfterMs`. Retry after `retryAfterMs`: an idle, expired lease is taken over automatically and the result reports it under `reclaimed`. Never call `browser_debugger_recover` on a live lease without explicit user approval, and pass the occupant's ID as `expectedSessionId`. A takeover detaches Chrome, which clears the old holder's pauses, breakpoints, interception, and profilers but not page side effects. After a takeover the old ID fails permanently with `raw_session_detached`; attach again rather than retrying.
 
 For Raw commands plus sanitized network metadata, also read [network-monitoring.md](network-monitoring.md). Attach Raw with `captureEvents=false`, start the network projection with `rawSessionId`, stop the projection, then detach Raw.
 
