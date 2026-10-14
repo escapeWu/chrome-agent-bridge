@@ -6,6 +6,8 @@ import process from "node:process";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { CHECKER_FILES } from "../extension/features/chatgpt-checker.js";
+import { REGION_LOCK_FILES } from "../extension/features/region-lock.js";
 
 const execFileAsync = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -23,6 +25,13 @@ const allowedFiles = [
   "popup.html",
   "popup.css",
   "popup.js",
+  "features/index.js",
+  "features/chatgpt-checker.js",
+  "features/region-lock.js",
+  // Every file the optional features register as content scripts, plus the
+  // vendored checker's license, comes from the feature modules themselves.
+  ...CHECKER_FILES,
+  ...REGION_LOCK_FILES,
   "icons/icon16.png",
   "icons/icon32.png",
   "icons/icon48.png",

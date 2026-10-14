@@ -70,6 +70,7 @@ test("MCP server exposes the browser and analysis tool surface", async (context)
       "browser_snapshot",
       "browser_status",
       "browser_watch_events",
+      "chatgpt_checker_status",
       "collect_code",
       "console_get_exceptions",
       "crypto_compare",
@@ -160,6 +161,10 @@ test("MCP server exposes the browser and analysis tool surface", async (context)
   assert.equal(recover.inputSchema.properties.browser.type, "string");
   const sessions = tools.find((tool) => tool.name === "browser_debugger_sessions");
   assert.equal(sessions.inputSchema.properties.browser.type, "string");
+
+  const checker = tools.find((tool) => tool.name === "chatgpt_checker_status");
+  assert.deepEqual(checker.inputSchema.required, ["tabId"]);
+  assert.equal(checker.inputSchema.properties.browser.type, "string");
 
   const collectCode = tools.find((tool) => tool.name === "collect_code");
   assert.equal(collectCode.inputSchema.required.includes("sessionId"), true);

@@ -29,6 +29,7 @@ const BROWSER_BOUND_TOOLS = new Set([
   "browser_cdp_attach",
   "browser_debugger_sessions",
   "browser_debugger_recover",
+  "chatgpt_checker_status",
 ]);
 
 const browserSelector = z
@@ -75,6 +76,10 @@ export function createBridgeServer() {
                   ? "Pass the session ID that currently holds the tab (see details.occupant), or omit debuggerSessionId when this task holds none."
                   : code === "snapshot_id_required" || code === "stale_ref"
                   ? "Take a fresh browser_snapshot and pass its snapshotId with the ref."
+                  : code === "checker_disabled"
+                  ? "Ask the user to turn on ChatGPT Checker in the Chrome Agent Bridge popup (ChatGPT tools) and reload the ChatGPT tab. Do not try to enable it any other way."
+                  : code === "not_chatgpt_tab"
+                  ? "Call browser_list_tabs and pass the tabId of a https://chatgpt.com tab."
                   : code === "bridge_offline"
                   ? "Ensure the unpacked extension and native host are installed, reload the extension, then retry."
                   : code === "unauthorized"
@@ -530,6 +535,17 @@ export function createBridgeServer() {
       if (result?.previous?.sessionId) clearCdpAnalysisSession(result.previous.sessionId);
       return asText(result);
     },
+  );
+
+  tool(
+    "chatgpt_checker_status",
+    {
+      title: "ChatGPT Checker panel status",
+      description:
+        "Read the ChatGPT Checker Next panel of one chatgpt.com tab as data: proof-of-work difficulty and the checker's own verdict on it (risk, medium, good, excellent), persona, user region, time zone and language, selected model and thinking level, feature usage limits, memory, and Codex usage. Also returns the US region-lock profile in effect. Requires the user to have turned on ChatGPT Checker in the extension popup. The panel only fills in as the page makes the matching requests, so a field is null until then (difficulty appears after the first message is sent). Read-only: it never sends a message, and it returns no chat content, URL, or title.",
+      inputSchema: { tabId: z.number().int().nonnegative().describe("A chatgpt.com tab from browser_list_tabs.") },
+    },
+    async (input) => asText(await callBridge("checker.status", input)),
   );
 
   registerLocalAnalysisTools({ tool, asText });

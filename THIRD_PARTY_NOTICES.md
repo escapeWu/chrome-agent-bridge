@@ -65,3 +65,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## ChatGPT Checker Next
+
+The optional ChatGPT Checker feature mounts [ChatGPT Checker Next](https://github.com/zetaloop/chatgpt-checker-next) v5.2.2 by zetaloop. The userscript is included unmodified at `extension/vendor/chatgpt-checker-next.user.js`, with its license text at `extension/vendor/CHATGPT-CHECKER-NEXT-LICENSE.txt`, and both files are part of the extension ZIP.
+
+ChatGPT Checker Next is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). That file keeps its own license; the rest of Chrome Agent Bridge remains under the MIT License. The script is plain, readable source, and the extension loads it only after the user turns the feature on.
+
+## shit-gpt region profile
+
+The optional US region lock follows the behavior of the `shit-gpt` browser extension (author link in its popup: [github.com/y-wi](https://github.com/y-wi)): the request language rule, the main-world page script that aligns `navigator` language, `Intl`, and `Date`, and the per-time-zone profile files. Chrome Agent Bridge's version covers only the four US time zones and adds the main-frame navigation request to the language rule.

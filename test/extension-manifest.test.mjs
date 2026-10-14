@@ -21,6 +21,7 @@ test("extension manifest requests only the documented capability set", async () 
   assert.deepEqual(manifest.permissions.sort(), [
     "activeTab",
     "debugger",
+    "declarativeNetRequestWithHostAccess",
     "nativeMessaging",
     "scripting",
     "storage",

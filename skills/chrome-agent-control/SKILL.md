@@ -22,6 +22,7 @@ Use `chrome-agent-bridge` when a task depends on the user's existing Chrome tabs
    - CPU/heap/coverage/trace or unsanitized response bodies, HAR, auth, and interception: read [performance-and-deep-network.md](references/performance-and-deep-network.md), then follow its Raw CDP prerequisite.
    - Supplied JavaScript analysis or transformation: read [code-analysis.md](references/code-analysis.md).
    - Supplied binary, Protobuf, HTTP/2, gRPC, protocol, or WASM data: read [protocol-and-wasm.md](references/protocol-and-wasm.md).
+   - ChatGPT Checker panel status (proof-of-work difficulty, persona, model, usage limits) on a chatgpt.com tab: read [chatgpt-checker.md](references/chatgpt-checker.md).
    - Raw commands plus a sanitized network projection: read `network-monitoring.md` and `raw-cdp.md`; do not load the other references.
 
 Do not read the entire `references/` directory preemptively.
