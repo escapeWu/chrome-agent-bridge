@@ -29,6 +29,86 @@ function send(type, payload = {}) {
   });
 }
 
+function startFeatures(doc) {
+  const checker = doc.querySelector("#checker-enabled");
+  const region = doc.querySelector("#region-enabled");
+  const profile = doc.querySelector("#region-profile");
+  const reload = doc.querySelector("#reload-tabs");
+  const notice = doc.querySelector("#features-notice");
+  const errorElements = {
+    chatgptChecker: doc.querySelector("#checker-error"),
+    regionLock: doc.querySelector("#region-error"),
+  };
+  const controls = [checker, region, profile, reload];
+
+  function setBusy(busy) {
+    for (const control of controls) control.disabled = busy;
+  }
+
+  function render(state) {
+    checker.checked = state.settings.chatgptChecker.enabled;
+    region.checked = state.settings.regionLock.enabled;
+    if (profile.options.length === 0) {
+      for (const { id, label, timeZone } of state.profiles) {
+        const option = doc.createElement("option");
+        option.value = id;
+        option.textContent = `${label} (${timeZone})`;
+        profile.append(option);
+      }
+    }
+    profile.value = state.settings.regionLock.profileId;
+    for (const [name, element] of Object.entries(errorElements)) {
+      const message = state.errors?.[name];
+      element.hidden = !message;
+      element.textContent = message ? `Could not apply: ${message}` : "";
+    }
+  }
+
+  async function save(patch) {
+    setBusy(true);
+    try {
+      const state = await send("features.set", { settings: patch });
+      render(state);
+      const failed = Object.keys(state.errors ?? {}).length > 0;
+      notice.textContent = failed
+        ? "A change could not be applied and was reverted."
+        : "Saved. Reload open ChatGPT tabs to apply it.";
+    } catch (error) {
+      notice.textContent = error instanceof Error ? error.message : "Could not save the setting";
+      void send("features.get").then(render, () => {});
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  checker.addEventListener("change", () => void save({ chatgptChecker: { enabled: checker.checked } }));
+  region.addEventListener("change", () => void save({ regionLock: { enabled: region.checked } }));
+  profile.addEventListener("change", () => void save({ regionLock: { profileId: profile.value } }));
+  reload.addEventListener("click", async () => {
+    setBusy(true);
+    try {
+      const { reloaded, cleaned } = await send("features.reload-tabs");
+      notice.textContent = reloaded + cleaned === 0
+        ? "No ChatGPT or OpenAI tabs are open."
+        : `Reloaded ${reloaded + cleaned} tab${reloaded + cleaned === 1 ? "" : "s"}.`;
+    } catch (error) {
+      notice.textContent = error instanceof Error ? error.message : "Could not reload the tabs";
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  void send("features.get").then(
+    (state) => {
+      render(state);
+      setBusy(false);
+    },
+    () => {
+      notice.textContent = "ChatGPT tool settings are unavailable.";
+    },
+  );
+}
+
 export function startPopup(doc = document, clipboard = navigator.clipboard) {
   const connection = doc.querySelector("#connection");
   const tokenElement = doc.querySelector("#token");
@@ -138,6 +218,7 @@ export function startPopup(doc = document, clipboard = navigator.clipboard) {
     }
   });
 
+  startFeatures(doc);
   void send("instance.get").then(setInstance, () => {});
   void send("auth.get").then(setConnected, setError);
 }

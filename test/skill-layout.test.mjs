@@ -10,6 +10,7 @@ const referencesDir = path.join(skillDir, "references");
 
 test("chrome-agent-control uses scenario-scoped progressive references", () => {
   const expectedReferences = [
+    "chatgpt-checker.md",
     "code-analysis.md",
     "connection-and-recovery.md",
     "network-monitoring.md",

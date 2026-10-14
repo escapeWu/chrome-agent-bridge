@@ -18,3 +18,16 @@ test("popup masks long-lived tokens and never uses synchronized storage", async 
   assert.equal(source.includes("storage.sync"), false);
   assert.equal(source.includes("console."), false);
 });
+
+test("every element the popup script looks up exists in popup.html", async () => {
+  const html = await fs.readFile(path.join(root, "extension/popup.html"), "utf8");
+  const script = await fs.readFile(path.join(root, "extension/popup.js"), "utf8");
+  const present = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
+  const wanted = [...script.matchAll(/querySelector\("#([\w-]+)"\)/g)].map((match) => match[1]);
+  assert.ok(wanted.length > 10);
+  // A lookup that returns null would throw while the popup starts and take the token card down with it.
+  assert.deepEqual(wanted.filter((id) => !present.has(id)), []);
+  for (const id of ["checker-enabled", "region-enabled", "region-profile", "reload-tabs"]) {
+    assert.equal(present.has(id), true, id);
+  }
+});

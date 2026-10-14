@@ -187,3 +187,64 @@ code.inline {
   font-size: 11px;
   line-height: 1.45;
 }
+
+.features-card {
+  margin-top: 12px;
+}
+
+.tag {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(47, 215, 255, 0.12);
+  color: #8fe9ff;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.feature {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(47, 215, 255, 0.14);
+}
+
+.section-title + .feature {
+  margin-top: 12px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toggle-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: #2fd7ff;
+  cursor: pointer;
+}
+
+.field select {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid rgba(47, 215, 255, 0.28);
+  border-radius: 9px;
+  background: #050d20;
+  color: #f7fbff;
+  font: inherit;
+  font-size: 13px;
+}
+
+.feature-error {
+  margin-top: 8px;
+  color: #ff8b8f;
+  font-size: 11px;
+  line-height: 1.45;
+}

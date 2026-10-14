@@ -250,9 +250,32 @@ The repository is also a Codex plugin: `.codex-plugin/plugin.json` registers the
 
 **Standalone MCP clients must install the paired Skill separately.** The Extension ZIP contains only the Chrome extension, and an MCP configuration exposes tools without teaching the Agent the required workflow. Follow [Install Chrome Agent Bridge for an Agent](./docs/agent-installation.md).
 
+## Optional ChatGPT tools
+
+The extension can add two features for `chatgpt.com` and `openai.com`. Both are **off by default** and are switched on only from the extension popup (**ChatGPT tools**); an agent cannot enable them. A change applies to pages loaded afterwards, so use the popup's **Reload ChatGPT tabs** button for tabs that are already open.
+
+### ChatGPT Checker
+
+Mounts [ChatGPT Checker Next](https://github.com/zetaloop/chatgpt-checker-next) v5.2.2 on `https://chatgpt.com/*` with its full feature set, unmodified, behind a small shim that supplies the Tampermonkey globals it expects. Its panel shows the proof-of-work difficulty and the checker's verdict on it, persona, user region, model and thinking selection, feature usage limits, memory, and Codex usage. It fills in from the page's own `/backend-api` responses and makes no requests of its own.
+
+`chatgpt_checker_status({tabId})` reads that panel back as structured data, together with the region-lock profile in effect. A field is `null` until the page has made the matching request; the difficulty appears after the first message is sent. The result contains no chat content, URL, or title. With the checker off the call fails with `checker_disabled`.
+
+### US region lock
+
+Makes the browser side of `openai.com` and `chatgpt.com` consistently US:
+
+- The request `Accept-Language` becomes `en-US,en;q=0.9` on every request, including page navigations.
+- `navigator.language`, `navigator.languages`, and `<html lang>` become `en-US`.
+- `Intl` and `Date` use the chosen US Eastern, Central, Mountain, or Pacific time zone, with daylight saving.
+- **Reload ChatGPT tabs** removes the `/zh-Hans-CN/` region path from open `openai.com` tabs.
+
+It does not read chat content or upload account data, and it does not change the public IP address, cookies, canvas, WebGL, hardware values, or challenge results. If a server routes by IP address, a non-US network exit still shows. `Date` getters and formatters are aligned; `Date` setters and the local-time `Date` constructor keep using the operating system's time zone.
+
+The extension requests one more permission for this, `declarativeNetRequestWithHostAccess`, which Chrome applies only to hosts the extension already has access to.
+
 ## Tools
 
-The server exposes 97 tools: 20 browser primitives and 77 analysis tools grouped into three batches. The full names, prerequisites, exclusions, and recommended call chains are in [docs/analysis-tools.md](./docs/analysis-tools.md).
+The server exposes 101 tools: 23 browser primitives, 1 optional ChatGPT tool, and 77 analysis tools grouped into three batches. The full names, prerequisites, exclusions, and recommended call chains are in [docs/analysis-tools.md](./docs/analysis-tools.md).
 
 Browser primitives:
 
@@ -282,6 +305,10 @@ Browser primitives:
 
 Prefer `browser_snapshot → browser_act(ref, snapshotId) → browser_snapshot`. `browser_click` and `browser_fill` remain selector-based compatibility tools.
 
+ChatGPT tool (needs the optional ChatGPT Checker, see [Optional ChatGPT tools](#optional-chatgpt-tools)):
+
+- `chatgpt_checker_status`
+
 Analysis groups:
 
 - Local JavaScript inspection, deobfuscation, AST transforms, and bounded crypto test vectors
@@ -308,6 +335,7 @@ Local analysis does not require Chrome. Raw-backed analysis starts from `browser
 - Set `captureEvents=false` when Raw is needed for commands but original events are not required. A sanitized network session can reuse that Raw attachment through `rawSessionId`; stopping the projection leaves Raw attached, while detaching Raw terminates its active projection.
 - Raw-backed analysis retains bounded scripts, debugger values, and request metadata only in the MCP process for the attached session. `browser_cdp_detach` clears that in-memory state. Trace, heap, and confirmed HAR exports are private local artifacts under `~/.chrome-agent-bridge/artifacts/` and remain until removed.
 - `network_export_har` and `network_extract_auth` require explicit `confirmed=true`. The latter returns live secrets; never include them in logs, commits, or normal Agent summaries.
+- The optional ChatGPT features are off by default and can be changed only from the extension popup. `chatgpt_checker_status` returns the checker panel and nothing from the conversation, and it returns an error until the user has enabled the checker.
 - Agents should require user confirmation before submitting, purchasing, publishing, deleting, sending, or changing permissions.
 
 The clean-room capability analysis and migration boundaries are documented in [docs/clean-room-browser-capabilities.md](./docs/clean-room-browser-capabilities.md).
@@ -345,4 +373,4 @@ Then remove the unpacked extension from `chrome://extensions`.
 
 ## License
 
-MIT
+MIT, except for the vendored ChatGPT Checker Next userscript in `extension/vendor/`, which is AGPL-3.0 and ships with its own license text. See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
