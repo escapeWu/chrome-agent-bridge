@@ -1,30 +1,26 @@
-// Browser-side region lock, run in the page's main world at document_start.
+// Main-world time-zone override, run at document_start. A profile script
+// (page/timezones/*.js) runs just before this file and leaves the IANA zone on
+// `globalThis.__CAB_TIMEZONE__`; this file consumes and removes that global.
 //
-// A profile script (features/page/profiles/*.js) runs just before this file and
-// leaves its settings on `globalThis.__CAB_REGION_PROFILE__`; this file consumes
-// and removes that global. It aligns navigator language, <html lang>, Intl and
-// Date with the profile. It does not touch the public IP, cookies, storage,
-// canvas, hardware values, or the page's content.
-//
-// Known limit: Date setters and the local-time Date constructor still use the
-// operating system's time zone. Only the getters and formatters are aligned.
+// It aligns Date getters/formatters and Intl.DateTimeFormat with the zone. It does
+// not change language, the IP address, cookies, or the operating system time zone.
+// Known limits: Date setters and the local-time Date constructor still use the
+// operating system's time zone, and Web Workers are not covered.
 (() => {
   "use strict";
 
-  const profile = globalThis.__CAB_REGION_PROFILE__;
+  const timeZone = globalThis.__CAB_TIMEZONE__;
   try {
-    delete globalThis.__CAB_REGION_PROFILE__;
+    delete globalThis.__CAB_TIMEZONE__;
   } catch {
-    globalThis.__CAB_REGION_PROFILE__ = undefined;
+    globalThis.__CAB_TIMEZONE__ = undefined;
   }
-  if (!profile || typeof profile !== "object") return;
+  if (typeof timeZone !== "string") return;
 
-  const appliedMarker = Symbol.for("chrome-agent-bridge.region-lock.applied");
+  const appliedMarker = Symbol.for("chrome-agent-bridge.timezone.applied");
   if (globalThis[appliedMarker]) return;
   Object.defineProperty(globalThis, appliedMarker, { value: true });
 
-  const { locale, timeZone } = profile;
-  const languages = Object.freeze([...profile.languages]);
   const NativeDateTimeFormat = Intl.DateTimeFormat;
   const nativeDateMethods = {
     toLocaleString: Date.prototype.toLocaleString,
@@ -32,58 +28,22 @@
     toLocaleTimeString: Date.prototype.toLocaleTimeString,
   };
 
-  function defineGetter(target, property, getter) {
-    if (!target) return;
-    const descriptor = Object.getOwnPropertyDescriptor(target, property);
-    try {
-      Object.defineProperty(target, property, {
-        configurable: true,
-        enumerable: descriptor?.enumerable ?? true,
-        get: getter,
-      });
-    } catch {
-      // A locked descriptor keeps the native value.
-    }
-  }
-
-  const navigatorPrototype = Object.getPrototypeOf(navigator);
-  defineGetter(navigatorPrototype, "language", () => locale);
-  defineGetter(navigatorPrototype, "languages", () => languages);
-
-  const normalizeLocales = (locales) => (locales === undefined ? locale : locales);
-
   function normalizeDateTimeOptions(options) {
     const normalized = options == null ? {} : { ...options };
     if (normalized.timeZone === undefined) normalized.timeZone = timeZone;
     return normalized;
   }
 
-  function wrapIntlConstructor(name, normalizeOptions) {
-    const Native = Intl[name];
-    if (typeof Native !== "function") return;
-    const prepare = (args) => {
-      const prepared = [...args];
-      prepared[0] = normalizeLocales(prepared[0]);
-      if (normalizeOptions) prepared[1] = normalizeOptions(prepared[1]);
-      return prepared;
-    };
-    const Wrapped = new Proxy(Native, {
-      apply: (target, thisArg, args) => Reflect.apply(target, thisArg, prepare(args)),
-      construct: (target, args, newTarget) => Reflect.construct(target, prepare(args), newTarget),
-    });
-    try {
-      Object.defineProperty(Intl, name, { configurable: true, value: Wrapped, writable: true });
-    } catch {
-      // Keep the native constructor if it is locked.
-    }
-  }
-
-  wrapIntlConstructor("DateTimeFormat", normalizeDateTimeOptions);
-  for (const name of [
-    "Collator", "DisplayNames", "ListFormat", "NumberFormat",
-    "PluralRules", "RelativeTimeFormat", "Segmenter",
-  ]) {
-    wrapIntlConstructor(name, null);
+  const WrappedDateTimeFormat = new Proxy(NativeDateTimeFormat, {
+    apply: (target, thisArg, args) =>
+      Reflect.apply(target, thisArg, [args[0], normalizeDateTimeOptions(args[1]), ...args.slice(2)]),
+    construct: (target, args, newTarget) =>
+      Reflect.construct(target, [args[0], normalizeDateTimeOptions(args[1]), ...args.slice(2)], newTarget),
+  });
+  try {
+    Object.defineProperty(Intl, "DateTimeFormat", { configurable: true, value: WrappedDateTimeFormat, writable: true });
+  } catch {
+    // Keep the native constructor if it is locked.
   }
 
   const partsFormatter = new NativeDateTimeFormat("en-US", {
@@ -158,13 +118,13 @@
       return dateString(this);
     },
     toLocaleDateString(locales, options) {
-      return nativeDateMethods.toLocaleDateString.call(this, normalizeLocales(locales), normalizeDateTimeOptions(options));
+      return nativeDateMethods.toLocaleDateString.call(this, locales, normalizeDateTimeOptions(options));
     },
     toLocaleString(locales, options) {
-      return nativeDateMethods.toLocaleString.call(this, normalizeLocales(locales), normalizeDateTimeOptions(options));
+      return nativeDateMethods.toLocaleString.call(this, locales, normalizeDateTimeOptions(options));
     },
     toLocaleTimeString(locales, options) {
-      return nativeDateMethods.toLocaleTimeString.call(this, normalizeLocales(locales), normalizeDateTimeOptions(options));
+      return nativeDateMethods.toLocaleTimeString.call(this, locales, normalizeDateTimeOptions(options));
     },
     toString() {
       const date = dateString(this);
@@ -181,17 +141,5 @@
     } catch {
       // Keep the native method if it is locked.
     }
-  }
-
-  const applyDocumentLanguage = () => {
-    if (!document.documentElement) return false;
-    document.documentElement.lang = locale;
-    return true;
-  };
-  if (!applyDocumentLanguage()) {
-    const observer = new MutationObserver(() => {
-      if (applyDocumentLanguage()) observer.disconnect();
-    });
-    observer.observe(document, { childList: true, subtree: true });
   }
 })();
