@@ -29,82 +29,51 @@ function send(type, payload = {}) {
   });
 }
 
-function startFeatures(doc) {
-  const checker = doc.querySelector("#checker-enabled");
-  const region = doc.querySelector("#region-enabled");
-  const profile = doc.querySelector("#region-profile");
-  const reload = doc.querySelector("#reload-tabs");
-  const notice = doc.querySelector("#features-notice");
-  const errorElements = {
-    chatgptChecker: doc.querySelector("#checker-error"),
-    regionLock: doc.querySelector("#region-error"),
-  };
-  const controls = [checker, region, profile, reload];
+function startTimezone(doc) {
+  const enabled = doc.querySelector("#timezone-enabled");
+  const select = doc.querySelector("#timezone-id");
+  const notice = doc.querySelector("#timezone-notice");
 
   function setBusy(busy) {
-    for (const control of controls) control.disabled = busy;
+    enabled.disabled = busy;
+    select.disabled = busy;
   }
 
-  function render(state) {
-    checker.checked = state.settings.chatgptChecker.enabled;
-    region.checked = state.settings.regionLock.enabled;
-    if (profile.options.length === 0) {
-      for (const { id, label, timeZone } of state.profiles) {
+  function render({ settings, zones }) {
+    if (select.options.length === 0) {
+      for (const { id, label, timeZone } of zones) {
         const option = doc.createElement("option");
         option.value = id;
         option.textContent = `${label} (${timeZone})`;
-        profile.append(option);
+        select.append(option);
       }
     }
-    profile.value = state.settings.regionLock.profileId;
-    for (const [name, element] of Object.entries(errorElements)) {
-      const message = state.errors?.[name];
-      element.hidden = !message;
-      element.textContent = message ? `Could not apply: ${message}` : "";
-    }
+    enabled.checked = settings.enabled;
+    select.value = settings.timezoneId;
   }
 
   async function save(patch) {
     setBusy(true);
     try {
-      const state = await send("features.set", { settings: patch });
-      render(state);
-      const failed = Object.keys(state.errors ?? {}).length > 0;
-      notice.textContent = failed
-        ? "A change could not be applied and was reverted."
-        : "Saved. Reload open ChatGPT tabs to apply it.";
+      render(await send("timezone.set", { settings: patch }));
+      notice.textContent = "Saved. Reload open tabs to apply it.";
     } catch (error) {
       notice.textContent = error instanceof Error ? error.message : "Could not save the setting";
-      void send("features.get").then(render, () => {});
+      void send("timezone.get").then(render, () => {});
     } finally {
       setBusy(false);
     }
   }
 
-  checker.addEventListener("change", () => void save({ chatgptChecker: { enabled: checker.checked } }));
-  region.addEventListener("change", () => void save({ regionLock: { enabled: region.checked } }));
-  profile.addEventListener("change", () => void save({ regionLock: { profileId: profile.value } }));
-  reload.addEventListener("click", async () => {
-    setBusy(true);
-    try {
-      const { reloaded, cleaned } = await send("features.reload-tabs");
-      notice.textContent = reloaded + cleaned === 0
-        ? "No ChatGPT or OpenAI tabs are open."
-        : `Reloaded ${reloaded + cleaned} tab${reloaded + cleaned === 1 ? "" : "s"}.`;
-    } catch (error) {
-      notice.textContent = error instanceof Error ? error.message : "Could not reload the tabs";
-    } finally {
-      setBusy(false);
-    }
-  });
-
-  void send("features.get").then(
+  enabled.addEventListener("change", () => void save({ enabled: enabled.checked }));
+  select.addEventListener("change", () => void save({ timezoneId: select.value }));
+  void send("timezone.get").then(
     (state) => {
       render(state);
       setBusy(false);
     },
     () => {
-      notice.textContent = "ChatGPT tool settings are unavailable.";
+      notice.textContent = "Time zone settings are unavailable.";
     },
   );
 }
@@ -218,7 +187,7 @@ export function startPopup(doc = document, clipboard = navigator.clipboard) {
     }
   });
 
-  startFeatures(doc);
+  startTimezone(doc);
   void send("instance.get").then(setInstance, () => {});
   void send("auth.get").then(setConnected, setError);
 }

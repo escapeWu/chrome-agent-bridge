@@ -31,6 +31,23 @@
         <p class="hint">Agents pick a browser by this name or ID when several are connected.</p>
       </section>
 
+      <section class="token-card" aria-labelledby="timezone-heading">
+        <div class="section-title">
+          <h2 id="timezone-heading">Time zone override</h2>
+          <span class="tag">Optional</span>
+        </div>
+        <label class="toggle-row" for="timezone-enabled">
+          <span>Override on all websites</span>
+          <input id="timezone-enabled" type="checkbox" disabled>
+        </label>
+        <label class="field">
+          <span>Time zone</span>
+          <select id="timezone-id" disabled></select>
+        </label>
+        <p class="hint">Makes Date and Intl report this time zone on every http(s) page. It does not change the system or Chrome profile time zone, language, or IP address. Reload open tabs to apply. Off by default.</p>
+        <p id="timezone-notice" class="hint" aria-live="polite"></p>
+      </section>
+
       <section class="token-card" aria-labelledby="token-heading">
         <div class="section-title">
           <h2 id="token-heading">Local authentication token</h2>
@@ -42,40 +59,6 @@
           <button id="copy" class="primary" type="button" disabled>Copy token</button>
           <button id="renew" class="danger" type="button" disabled>Renew</button>
         </div>
-      </section>
-
-      <section class="token-card features-card" aria-labelledby="features-heading">
-        <div class="section-title">
-          <h2 id="features-heading">ChatGPT tools</h2>
-          <span class="tag">Optional</span>
-        </div>
-
-        <div class="feature">
-          <label class="toggle-row" for="checker-enabled">
-            <span>ChatGPT Checker</span>
-            <input id="checker-enabled" type="checkbox" disabled>
-          </label>
-          <p class="hint">Shows the Checker Next panel on chatgpt.com and lets agents read it with chatgpt_checker_status. Off by default.</p>
-          <p id="checker-error" class="feature-error" hidden></p>
-        </div>
-
-        <div class="feature">
-          <label class="toggle-row" for="region-enabled">
-            <span>US region lock</span>
-            <input id="region-enabled" type="checkbox" disabled>
-          </label>
-          <label class="field">
-            <span>Time zone</span>
-            <select id="region-profile" disabled></select>
-          </label>
-          <p class="hint">Uses en-US and the chosen US time zone for openai.com and chatgpt.com, and removes /zh-Hans-CN from openai.com. It does not change your IP address. Off by default.</p>
-          <p id="region-error" class="feature-error" hidden></p>
-        </div>
-
-        <div class="actions">
-          <button id="reload-tabs" class="primary" type="button" disabled>Reload ChatGPT tabs</button>
-        </div>
-        <p id="features-notice" class="hint" aria-live="polite"></p>
       </section>
 
       <p id="notice" class="notice" aria-live="polite">

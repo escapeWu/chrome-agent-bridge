@@ -1,4 +1,4 @@
-import { chatgptCheckerStatus, handleFeatureMessage, syncFeatures } from "./features/index.js";
+import { handleTimezoneMessage, syncTimezone } from "./timezone.js";
 
 const HOST_NAME = "com.escape_wu.chrome_agent_bridge";
 const MAX_SNAPSHOT_CHARS = 50_000;
@@ -1961,8 +1961,6 @@ async function dispatch(method, params) {
       return renewDebuggerSession(params);
     case "debugger.recover":
       return recoverDebuggerSession(params);
-    case "checker.status":
-      return chatgptCheckerStatus(params);
     default:
       throw codedError("method_not_found", `Unsupported method: ${method}`);
   }
@@ -1970,18 +1968,17 @@ async function dispatch(method, params) {
 
 chrome.runtime.onInstalled.addListener(connect);
 chrome.runtime.onStartup.addListener(connect);
-// Re-apply the optional features' stored settings on install, update and browser
-// start so Chrome's registrations always match them, including after an update
-// changes the packaged script files.
-chrome.runtime.onInstalled.addListener(() => void syncFeatures().catch(() => {}));
-chrome.runtime.onStartup.addListener(() => void syncFeatures().catch(() => {}));
+// Re-apply the stored time-zone override on install, update and browser start so
+// Chrome's registrations always match it, including after an update changes the files.
+chrome.runtime.onInstalled.addListener(() => void syncTimezone().catch(() => {}));
+chrome.runtime.onStartup.addListener(() => void syncTimezone().catch(() => {}));
 chrome.action.onClicked.addListener(connect);
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return false;
-  if (typeof message?.type === "string" && message.type.startsWith("features.")) {
-    void handleFeatureMessage(message).then(
+  if (typeof message?.type === "string" && message.type.startsWith("timezone.")) {
+    void handleTimezoneMessage(message).then(
       (result) => sendResponse({ ok: true, result }),
-      (error) => sendResponse({ ok: false, error: errorPayload(error, "features_error") }),
+      (error) => sendResponse({ ok: false, error: errorPayload(error, "timezone_error") }),
     );
     return true;
   }
